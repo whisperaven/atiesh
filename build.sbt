@@ -1,0 +1,83 @@
+/*
+ * Copyright (C) Hao Feng
+ */
+
+lazy val common = Seq(
+  organization := "io.0ops",
+  version := "2.0.0",
+  scalaVersion := "2.11.12",
+)
+
+lazy val root = (project in file("."))
+  .settings(common)
+  .aggregate(core, httputils, kafka, http, syslog)
+
+/* atiesh core project */
+lazy val dependencies = Seq(
+    // configparser
+    "com.typesafe"                % "config"              % "1.3.2",
+    // kamon
+    "io.kamon"                   %% "kamon-core"          % "1.0.0" 
+      exclude("org.slf4j", "slf4j-api") exclude("org.slf4j", "slf4j-log4j12")
+      exclude("com.typesafe", "config"),
+    "io.kamon"                   %% "kamon-prometheus"    % "1.0.0",
+    "io.kamon"                   %% "kamon-system-metrics"% "1.0.0",
+    // akka-actor
+    "com.typesafe.akka"          %% "akka-actor"          % "2.5.12",
+    // logger
+    "ch.qos.logback"              % "logback-classic"     % "1.2.3", // scalalogging docs
+    "com.typesafe.scala-logging" %% "scala-logging"       % "3.9.0"
+)
+lazy val core = (project in file("core"))
+  .settings(
+    common,
+    name := "atiesh",
+    libraryDependencies ++= dependencies
+  )
+
+/* atiesh utils http */
+lazy val httputils = (project in file("utils/http"))
+  .settings(
+    common,
+    name := "atiesh-utils-http",
+    libraryDependencies ++= Seq(
+      "com.typesafe.akka" %% "akka-stream" % "2.5.12"
+        exclude("com.typesafe", "config"),
+      "com.typesafe.akka" %% "akka-http" % "10.1.1",
+    )
+  ).dependsOn(core)
+
+/* atiesh semantics kafka */
+lazy val kafka = (project in file("semantics-kafka"))
+  .settings(
+    common,
+    name := "atiesh-semantics-kafka",
+    libraryDependencies ++= Seq(
+      "org.apache.kafka" %% "kafka" % "1.1.1"
+        exclude("org.slf4j", "slf4j-api") exclude("org.slf4j", "slf4j-log4j12")
+        exclude("com.typesafe.scala-logging", "scala-logging_2.11")
+        exclude("com.typesafe.scala-logging", "scala-logging_2.12")
+    )
+  ).dependsOn(core)
+
+/* atiesh semantics http */
+lazy val http = (project in file("semantics-http"))
+  .settings(
+    common,
+    name := "atiesh-semantics-http",
+    libraryDependencies ++= Seq(
+      "com.typesafe.akka" %% "akka-stream" % "2.5.12"
+        exclude("com.typesafe", "config"),
+      "com.typesafe.akka" %% "akka-http" % "10.1.1",
+    )
+  ).dependsOn(httputils)
+
+/* atiesh semantics syslog (experiment) */
+lazy val syslog = (project in file("semantics-syslog"))
+  .settings(
+    common,
+    name := "atiesh-semantics-syslog",
+    libraryDependencies ++= Seq(
+      "com.cloudbees" % "syslog-java-client" % "1.1.4"
+    )
+  ).dependsOn(core)
