@@ -2,10 +2,16 @@
  * Copyright (C) Hao Feng
  */
 
+import sbt.Credentials
+import sbt.Keys.{ credentials, publishTo }
+
 lazy val common = Seq(
   organization := "io.0ops",
   version := "2.0.0",
   scalaVersion := "2.11.12",
+
+  publishTo := Some(Resolver.file("file",  new File(Path.userHome.absolutePath+"/.m2/repository"))),
+  credentials += Credentials(Path.userHome / ".sbt" / ".credentials")
 )
 
 lazy val root = (project in file("."))

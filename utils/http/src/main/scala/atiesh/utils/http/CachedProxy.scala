@@ -36,7 +36,7 @@ object CachedProxy {
   }
 
   var proxyInstance: CachedProxy = _
-  def getProxyInstance(): CachedProxy = {
+  def getProxyInstance: CachedProxy = {
     if (proxyInstance == null) {
       throw new UninitializedProxyException("cached proxy not initialized, make sure you have <cached-proxy> config section")
     } else {
@@ -74,12 +74,13 @@ class CachedProxy(name: String, cpfg: Configuration) extends AtieshComponent(nam
     http = Http()
     ec = system.dispatcher
     materializer = ActorMaterializer()
+    scheduler = system.scheduler
 
     tasks = new JCHashMap[String, (FiniteDuration, Cancellable)](cacheSize)
     cache = new JCHashMap[String, AnyRef](cacheSize)
 
-    proxyInstance = this
-    proxyInstance
+    proxyInstance = this.asInstanceOf[CachedProxy]
+    this
   }
 
   def registerRequest[T](

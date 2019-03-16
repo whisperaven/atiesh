@@ -20,7 +20,16 @@ import atiesh.statement.Closed
 import atiesh.utils.{ Configuration, Logging }
 import atiesh.metrics.MetricsGroup._
 
+object KafkaSourceSemantics {
+  object KafkaSourceSemanticsHeadersName {
+    val TOPIC = "kafkaTopic"
+    val PARTITION = "kafkaPartition"
+  }
+}
+
 trait KafkaSourceSemantics extends SourceSemantics with Logging { this: Source =>
+  import KafkaSourceSemantics._
+
   object KafkaSourceSemanticsOpts {
     val OPT_CONSUMER_SETTINGS_SECTION = "client-settings"
 
@@ -29,10 +38,6 @@ trait KafkaSourceSemantics extends SourceSemantics with Logging { this: Source =
 
     val OPT_CONSUMER_POLL_TIMEOUT = "poll-timeout"
     val DEF_CONSUMER_POLL_TIMEOUT = FiniteDuration(1000, MILLISECONDS)
-  }
-  object KafkaSourceSemanticsHeadersName {
-    val TOPIC = "kafkaTopic"
-    val PARTITION = "kafkaPartition"
   }
 
   private var pollTimeout: FiniteDuration = _
