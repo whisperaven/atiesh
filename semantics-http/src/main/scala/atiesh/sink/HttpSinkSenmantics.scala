@@ -22,7 +22,6 @@ import atiesh.event.Event
 import atiesh.statement.{ Signal, Transaction, Close, Closed }
 import atiesh.utils.{ Configuration, Logging }
 import atiesh.utils.http.{ HttpRequest, HttpResponse }
-import atiesh.metrics.MetricsGroup._
 
 trait HttpSinkSemantics extends SinkSemantics with Logging { this: Sink =>
   object HttpSemanticsOpts {

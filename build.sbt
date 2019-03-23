@@ -7,16 +7,18 @@ import sbt.Keys.{ credentials, publishTo }
 
 lazy val common = Seq(
   organization := "io.0ops",
-  version := "2.0.0",
+  version := "2.0.1",
   scalaVersion := "2.11.12",
 
   publishTo := Some(Resolver.file("file",  new File(Path.userHome.absolutePath+"/.m2/repository"))),
   credentials += Credentials(Path.userHome / ".sbt" / ".credentials")
 )
 
-lazy val root = (project in file("."))
-  .settings(common)
-  .aggregate(core, httputils, kafka, http, syslog)
+lazy val distribution = Project(
+  id = "atiesh-distribution",
+  base = file(".")
+).aggregate(core, httputils, kafka, http, syslog)
+ .settings(common)
 
 /* atiesh core project */
 lazy val dependencies = Seq(
@@ -26,7 +28,6 @@ lazy val dependencies = Seq(
     "io.kamon"                   %% "kamon-core"          % "1.0.0" 
       exclude("org.slf4j", "slf4j-api") exclude("org.slf4j", "slf4j-log4j12")
       exclude("com.typesafe", "config"),
-    "io.kamon"                   %% "kamon-prometheus"    % "1.0.0",
     "io.kamon"                   %% "kamon-system-metrics"% "1.0.0",
     // akka-actor
     "com.typesafe.akka"          %% "akka-actor"          % "2.5.12",

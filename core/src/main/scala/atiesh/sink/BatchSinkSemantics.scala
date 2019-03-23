@@ -47,7 +47,7 @@ trait BatchSinkSemantics extends SinkSemantics with Logging { this: Sink =>
 
       case FlushEvent(flushed) =>
         currentBatchs.foldLeft(())({ case (_, (k, v)) =>
-          logger.debug("<Batch.{}> flusing batch of <{}> before close", getName, k)
+          logger.info("<Batch.{}> flusing batch of <{}> before close", getName, k)
           v.flush(false)
         })
         flushed.success(Closed(s"Batch.${getName}"))

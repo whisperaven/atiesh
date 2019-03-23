@@ -43,7 +43,6 @@ The built-in components and semantics was splited to several different projects,
 | :------------------------: | :------------------: | :------------------------: |
 | com.typesafe               | config               | configuration read & parse |
 | io.kamon                   | kamon-core           | monitor data collection    |
-|                            | kamon-prometheus     | monitor data exporter      |
 |                            | kamon-system-metrics | monitor data support       |
 | com.typesafe.akka          | akka-actor           | core actor library         |
 | com.typesafe.scala-logging | scala-logging        | logging support            |

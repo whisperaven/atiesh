@@ -65,12 +65,16 @@ class AtieshServer(cfg: Configuration) extends Logging {
   private var sources: List[Source] = _
   private var interceptors: List[Interceptor] = _
 
-  Metrics.initialize(cfg)
   def startup() {
     logger.info("initialize atiesh server")
 
     /*
-     * initialize helper components first
+     * initialize metrics components first
+     */
+    initializeComponent(cfg, Metrics.getComponentName)(c => { Metrics.initializeMetrics(c)(cfg) })
+
+    /*
+     * initialize helper components before source & interceptor & sink
      *    other components may depends on these helper components like CachedProxy
      */
     components = initializeComponent(cfg)(c => { Component.initializeComponents(c) })
