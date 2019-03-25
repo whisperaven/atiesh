@@ -43,7 +43,6 @@
 | :------------------------: | :------------------: | :---------------------: |
 | com.typesafe               | config               | 配置子系统              |
 | io.kamon                   | kamon-core           | 监控数据的收集          |
-|                            | kamon-prometheus     | 监控数据的展示          |
 |                            | kamon-system-metrics | 监控数据的收集 - 系统级 |
 | com.typesafe.akka          | akka-actor           | 核心 Actor 模型         |
 | com.typesafe.scala-logging | scala-logging        | 日志子系统              |

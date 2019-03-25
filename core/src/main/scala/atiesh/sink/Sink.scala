@@ -85,6 +85,7 @@ trait SinkSemantics extends Logging { this: Sink =>
   }
 
   def signal(sig: Int): Unit = {
+    SinkMetrics.signalSendCount.increment()
     logger.debug("sink <{}> sending signal <{}>", getName, sig)
     ref ! Signal(sig)
   }
@@ -95,12 +96,14 @@ trait SinkSemantics extends Logging { this: Sink =>
   }
 
   def commit(tran: Promise[Transaction]): Future[Transaction] = {
+    SinkMetrics.transactionCommitCount.increment()
     logger.debug("sink <{}> receiving commit statement <{}@{}>", getName, tran, tran.hashCode.toHexString)
     ref ! Commit(tran)
     tran.future
   }
 
   def ack(tran: Promise[Transaction]): Unit = {
+    SinkMetrics.transactionAckedCount.increment()
     logger.debug("sink <{}> acknowledging commit statement <{}@{}>", getName, tran, tran.hashCode.toHexString)
     tran.success(Transaction(getName))
   }

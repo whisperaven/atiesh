@@ -19,6 +19,9 @@ object MetricsGroup {
 
   // sinks
   object SinkMetrics {
-    val eventSubmitCount = Metrics.newCounter("Core.Sink.EventDrainAttemptCount")
+    val eventSubmitCount       = Metrics.newCounter("Core.Sink.EventDrainAttemptCount")
+    val signalSendCount        = Metrics.newCounter("Core.Sink.SignalSendAttemptCount")
+    val transactionCommitCount = Metrics.newCounter("Core.Sink.TransactionCommitAttemptCount")
+    val transactionAckedCount  = Metrics.newCounter("Core.Sink.TransactionAcknowledgedCount")
   }
 }
