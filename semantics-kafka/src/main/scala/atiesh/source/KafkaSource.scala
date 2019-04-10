@@ -27,5 +27,4 @@ class KafkaSource(
   def startup(): Unit = { 
     logger.info("starting source <{}>", getName)
   }
-
 }

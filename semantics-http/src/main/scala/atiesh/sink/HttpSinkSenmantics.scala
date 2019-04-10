@@ -36,7 +36,7 @@ trait HttpSinkSemantics extends SinkSemantics with Logging { this: Sink =>
   val SIG_NEED_RETRY: Int = 1
   val SIG_REQ_COMPLETED: Int = 2
 
-  implicit var ec: ExecutionContext = _
+  implicit var httpExecutionContext: ExecutionContext = _
   implicit var materializer: Materializer = _
 
   var requestQueue: SourceQueueWithComplete[(AkkaHttpRequest, Promise[AkkaHttpResponse])] = _
@@ -65,7 +65,7 @@ trait HttpSinkSemantics extends SinkSemantics with Logging { this: Sink =>
       HttpSemanticsOpts.DEF_HTTPSINK_AKKA_DISPATCHER)
     val queueSize = cfg.getInt(HttpSemanticsOpts.OPT_REQUEUE_SIZE, HttpSemanticsOpts.DEF_REQUEUE_SIZE)
 
-    ec = system.dispatchers.lookup(akkaDispatcher)
+    httpExecutionContext = system.dispatchers.lookup(akkaDispatcher)
     materializer = ActorMaterializer()
 
     requestTransitionBackpressureBoundary = cfg.getLong(
@@ -95,7 +95,7 @@ trait HttpSinkSemantics extends SinkSemantics with Logging { this: Sink =>
     this
   }
 
-  def process(sig: Int): Unit = {
+  override def process(sig: Int): Unit = {
     logger.debug("sink <{}> handle signal <{}>", getName, sig)
     sig match {
       /* handle request retry signal */

@@ -104,7 +104,7 @@ trait BatchSinkSemantics extends SinkSemantics with Logging { this: Sink =>
 
     val flushTask: Option[Cancellable] = {
       if (timeout.length > 0) {
-        Some(system.scheduler.scheduleOnce(timeout)(onTimeout)(system.dispatcher))
+        Some(system.scheduler.scheduleOnce(timeout)(onTimeout)(batchExecutionContext))
       } else {
         None
       }
@@ -158,9 +158,9 @@ trait BatchSinkSemantics extends SinkSemantics with Logging { this: Sink =>
   }
 
   override def stop(closed: Promise[Closed]): Unit = {
-    val f = Promise[Closed]()
-    batchManager ! FlushEvent(f)
-    Await.ready(f.future, Duration.Inf).value.get match {
+    val fp = Promise[Closed]()
+    batchManager ! FlushEvent(fp)
+    Await.ready(fp.future, Duration.Inf).value.get match {
       case Success(flushed) =>
         logger.debug("<{}> flushed all batchs", flushed.component)
       case Failure(exc) =>
