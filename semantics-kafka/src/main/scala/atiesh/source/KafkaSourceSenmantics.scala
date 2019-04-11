@@ -10,13 +10,11 @@ import java.util.Properties
 import scala.concurrent.Promise
 import scala.concurrent.duration._
 import scala.collection.JavaConverters._
-// akka
-import akka.actor.ActorSystem
 // kafka
 import org.apache.kafka.clients.consumer.{ KafkaConsumer, ConsumerRecords }
 // internal
 import atiesh.event.{ Event, Empty, SimpleEvent }
-import atiesh.statement.Closed
+import atiesh.statement.{ Ready, Closed }
 import atiesh.utils.{ Configuration, Logging }
 import atiesh.metrics.MetricsGroup._
 
@@ -25,13 +23,9 @@ object KafkaSourceSemantics {
     val TOPIC = "kafkaTopic"
     val PARTITION = "kafkaPartition"
   }
-}
-
-trait KafkaSourceSemantics extends SourceSemantics with Logging { this: Source =>
-  import KafkaSourceSemantics._
 
   object KafkaSourceSemanticsOpts {
-    val OPT_CONSUMER_SETTINGS_SECTION = "client-settings"
+    val OPT_CONSUMER_PROPERTIES_SECTION = "kafka-properties"
 
     val OPT_CONSUMER_TOPICS = "topics"
     val DEF_CONSUMER_TOPICS = List[String]()
@@ -39,6 +33,10 @@ trait KafkaSourceSemantics extends SourceSemantics with Logging { this: Source =
     val OPT_CONSUMER_POLL_TIMEOUT = "poll-timeout"
     val DEF_CONSUMER_POLL_TIMEOUT = FiniteDuration(1000, MILLISECONDS)
   }
+}
+
+trait KafkaSourceSemantics extends SourceSemantics with Logging { this: Source =>
+  import KafkaSourceSemantics._
 
   private var pollTimeout: FiniteDuration = _
   private var consumer: KafkaConsumer[String, String] = _
@@ -50,7 +48,7 @@ trait KafkaSourceSemantics extends SourceSemantics with Logging { this: Source =
           props.put(k, v)
         }
       case None =>
-        throw new SourceInitializeException("can not initialize kafka source semantics, missing consumer settings")
+        throw new SourceInitializeException("can not initialize kafka source semantics, missing consumer properties")
     }
 
     val consumer = new KafkaConsumer[String, String](props)
@@ -58,26 +56,6 @@ trait KafkaSourceSemantics extends SourceSemantics with Logging { this: Source =
     logger.debug("source <{}> consumer created and subscribe topic(s): {}", name, topics)
 
     consumer
-  }
-  def getConsumer(): KafkaConsumer[String, String] = consumer
-
-  override def bootstrap()(implicit system: ActorSystem): Source = {
-    super.bootstrap()
-
-    val cfg = getConfiguration
-    val topics = cfg.getStringList(
-      KafkaSourceSemanticsOpts.OPT_CONSUMER_TOPICS,
-      KafkaSourceSemanticsOpts.DEF_CONSUMER_TOPICS)
-
-    logger.debug("source <{}> initialize kafka consumer instances", getName)
-    val ccf = cfg.getSection(KafkaSourceSemanticsOpts.OPT_CONSUMER_SETTINGS_SECTION)
-
-    pollTimeout = cfg.getDuration(
-      KafkaSourceSemanticsOpts.OPT_CONSUMER_POLL_TIMEOUT,
-      KafkaSourceSemanticsOpts.DEF_CONSUMER_POLL_TIMEOUT)
-    consumer = createConsumer(getName, ccf, topics)
-
-    this
   }
 
   def mainCycle(): Unit = {
@@ -112,6 +90,24 @@ trait KafkaSourceSemantics extends SourceSemantics with Logging { this: Source =
       }
       commit()
     }
+  }
+
+  override def start(ready: Promise[Ready]): Unit = {
+    val cfg = getConfiguration
+    val topics = cfg.getStringList(
+      KafkaSourceSemanticsOpts.OPT_CONSUMER_TOPICS,
+      KafkaSourceSemanticsOpts.DEF_CONSUMER_TOPICS)
+
+    logger.debug("source <{}> initialize kafka consomer instances", getName)
+
+    val ccf = cfg.getSection(KafkaSourceSemanticsOpts.OPT_CONSUMER_PROPERTIES_SECTION)
+
+    pollTimeout = cfg.getDuration(
+      KafkaSourceSemanticsOpts.OPT_CONSUMER_POLL_TIMEOUT,
+      KafkaSourceSemanticsOpts.DEF_CONSUMER_POLL_TIMEOUT)
+    consumer = createConsumer(getName, ccf, topics)
+
+    super.start(ready)
   }
 
   override def stop(closed: Promise[Closed]): Unit = {

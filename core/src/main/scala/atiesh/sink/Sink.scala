@@ -6,7 +6,7 @@ package atiesh.sink
 
 // scala
 import scala.util.{ Try, Success, Failure }
-import scala.concurrent.{ Promise, Future, Await }
+import scala.concurrent.{ ExecutionContext, Promise, Future, Await }
 import scala.concurrent.duration._
 // akka
 import akka.actor.{ Props, Actor, ActorSystem, ActorRef }
@@ -21,6 +21,7 @@ trait Sink {
   def getName: String
   def getDispatcher: String
   def getConfiguration: Configuration
+  def getExecutionContext: ExecutionContext
 
   def bootstrap()(implicit system: ActorSystem): Sink
   object SinkActor {
@@ -30,8 +31,7 @@ trait Sink {
     override def receive: Receive = LoggingReceive {
       case Open(ready) =>
         try {
-          startup()
-          ready.success(Ready(getName))
+          start(ready)
         } catch {
           case exc: Throwable =>
             ready.failure(exc)
@@ -44,17 +44,25 @@ trait Sink {
         process(sig)
 
       case Close(closed) =>
-        stop(closed)
+        try {
+          stop(closed)
+        } catch {
+          case exc: Throwable =>
+            closed.failure(exc)
+        }
 
       case Commit(tran) =>
         ack(tran)
     }
   }
   var ref: ActorRef = _
+  var sec: ExecutionContext = _
 
   def open(ready: Promise[Ready]): Future[Ready]
-  def stop(closed: Promise[Closed]): Unit
+  def start(ready: Promise[Ready]): Unit
+
   def close(closed: Promise[Closed]): Future[Closed]
+  def stop(closed: Promise[Closed]): Unit
 
   def submit(event: Event): Unit
   def commit(tran: Promise[Transaction]): Future[Transaction]
@@ -90,6 +98,10 @@ trait SinkSemantics extends Logging { this: Sink =>
     ref ! Signal(sig)
   }
 
+  def process(sig: Int): Unit = {
+    logger.debug("sink <{}> handle signal <{}>", getName, sig)
+  }
+
   def submit(event: Event): Unit = {
     SinkMetrics.eventSubmitCount.increment()
     ref ! event
@@ -108,18 +120,19 @@ trait SinkSemantics extends Logging { this: Sink =>
     tran.success(Transaction(getName))
   }
 
+  def start(ready: Promise[Ready]): Unit = {
+    startup()
+    ready.success(Ready(getName))
+  }
+
   def stop(closed: Promise[Closed]): Unit = {
-    try {
-      shutdown()
-    } catch {
-      case exc: Throwable =>
-        closed.failure(exc)
-    }
-    if (!closed.isCompleted) closed.success(Closed(getName))
+    shutdown()
+    closed.success(Closed(getName))
   }
 
   def bootstrap()(implicit system: ActorSystem): Sink = {
     ref = system.actorOf(SinkActor.props().withDispatcher(getDispatcher), actorName)
+    sec = system.dispatchers.lookup(getDispatcher)
     this
   }
 }
@@ -128,13 +141,14 @@ abstract class AtieshSink(name: String, dispatcher: String, cfg: Configuration) 
   final def getName: String = name
   final def getDispatcher: String = dispatcher
   final def getConfiguration: Configuration = cfg
+  final def getExecutionContext: ExecutionContext = sec
 }
 
 object Sink extends Logging {
   object ComponentOpts {
     val OPT_SINK_CLSNAME = "type"
     val OPT_AKKA_DISPATCHER = "akka-dispatcher"
-    val DEF_AKKA_DISPATCHER = "akka.actor.default-blocking-io-dispatcher"
+    val DEF_AKKA_DISPATCHER = "akka.actor.default-dispatcher"
   }
   def getComponentName: String = "sinks"
 

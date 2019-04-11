@@ -125,7 +125,5 @@ trait SyslogSinkSemantics extends SinkSemantics with Logging { this: Sink =>
     this
   }
 
-  def process(sig: Int): Unit = ()
-
   def sendSyslogMessage(message: String): Unit = syslogMessageSender.sendMessage(message)
 }

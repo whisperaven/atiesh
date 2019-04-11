@@ -42,16 +42,19 @@ trait Source {
     override def receive: Receive = LoggingReceive {
       case Open(ready) =>
         try {
-          startup()
-          ready.success(Ready(getName))
-          scheduleNextCycle()
+          start(ready)
         } catch {
           case exc: Throwable =>
             ready.failure(exc)
         }
 
       case Close(closed) =>
-        if (shuttingDown.compareAndSet(false, true)) stop(closed)
+        try {
+          if (shuttingDown.compareAndSet(false, true)) stop(closed)
+        } catch {
+          case exc: Throwable =>
+            closed.failure(exc)
+        }
 
       case Continue =>
         if (!shuttingDown.get()) {
@@ -64,11 +67,14 @@ trait Source {
   var ref: ActorRef = _
 
   def open(ready: Promise[Ready]): Future[Ready]
-  def stop(closed: Promise[Closed]): Unit
+  def start(ready: Promise[Ready]): Unit
+
   def close(closed: Promise[Closed]): Future[Closed]
+  def stop(closed: Promise[Closed]): Unit
 
   def intercept(event: Event): Event
   def sink(event: Event): Unit
+  def commit(): Unit
 
   def startup(): Unit
   def mainCycle(): Unit
@@ -79,12 +85,13 @@ trait SourceSemantics extends Logging { this: Source =>
   def actorName: String = s"actor.source.${getName}"
 
   def open(ready: Promise[Ready]): Future[Ready] = {
+    logger.debug("source <{}> receiving open statement <{}@{}>", getName, ready, ready.hashCode.toHexString)
     ref ! Open(ready)
     ready.future
   }
 
   def close(closed: Promise[Closed]): Future[Closed] = {
-    logger.debug("source <{}> receiving closing statement <{}@{}>", getName, closed, closed.hashCode.toHexString)
+    logger.debug("source <{}> receiving close statement <{}@{}>", getName, closed, closed.hashCode.toHexString)
     ref ! Close(closed)
     closed.future
   }
@@ -164,14 +171,15 @@ trait SourceSemantics extends Logging { this: Source =>
     transactions.clear()
   }
 
+  def start(ready: Promise[Ready]): Unit = {
+    startup()
+    ready.success(Ready(getName))
+    scheduleNextCycle()
+  }
+
   def stop(closed: Promise[Closed]): Unit = {
-    try {
-      shutdown()
-    } catch {
-      case exc: Throwable =>
-        closed.failure(exc)
-    }
-    if (!closed.isCompleted) closed.success(Closed(getName))
+    shutdown()
+    closed.success(Closed(getName))
   }
 
   def bootstrap()(implicit system: ActorSystem): Source = {

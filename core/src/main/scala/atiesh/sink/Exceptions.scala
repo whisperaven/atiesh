@@ -10,6 +10,12 @@ class SinkInitializeException(message: String, cause: Throwable) extends Runtime
   def this() = this(null, null)
 }
 
+class SinkInvalidEventException(message: String, cause: Throwable) extends RuntimeException(message, cause) {
+  def this(message: String) = this(message, null)
+  def this(cause: Throwable) = this(null, cause)
+  def this() = this(null, null)
+}
+
 class SinkBufferOverflowedException(message: String, cause: Throwable) extends RuntimeException(message, cause) {
   def this(message: String) = this(message, null)
   def this(cause: Throwable) = this(null, cause)
