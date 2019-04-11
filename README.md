@@ -25,9 +25,11 @@ The basic unit of data (or messages) is the *event*, they were consumed or accep
 | Component Name                 | Type          | Usage                             |
 | :----------------------------: | :-----------: | :-------------------------------: |
 | atiesh.source.DevZero          | Source        | generate and produce string "0"   |
+| atiesh.source.KafkaSource      | Source        | poll event from kafka brokers     |
 | atiesh.interceptor.DevNull     | Interceptor   | intercept and discard everything  |
 | atiesh.interceptor.Transparent | Interceptor   | intercept and forward everything  |
 | atiesh.sink.DevNull            | Sink          | drain and discard everything      |
+| atiesh.sink.KafkaSink          | Sink          | drain and write event to kafka    |
 | atiesh.utils.http.CachedProxy  | UtilComponent | external http access & cache tool |
 
 - These components just for test and as component development example (except *CachedProxy* )
@@ -56,6 +58,7 @@ The *BatchSinkSemantics* was inside the core project, others are not
 | atiesh.sink.BatchSinkSemantics     | SinkSemantics   | Batch Mode Support                |
 | atiesh.sink.HttpSinkSemantics      | SinkSemantics   | Protocol Support - Http           |
 | atiesh.sink.SyslogSinkSemantics    | SinkSemantics   | Protocol Support - Syslog         |
+| atiesh.sink.KafkaSinkSemantics     | SinkSemantics   | Protocol Support - Kafka Producer |
 | atiesh.source.KafkaSourceSemantics | SourceSemantics | Protocol Support - Kafka Consumer |
 
 ## API Levels
@@ -63,7 +66,7 @@ The *BatchSinkSemantics* was inside the core project, others are not
 Only the *source* and *sink* components can extends by semantics, and their api was splited to three levels
 
 - *Component API*, component abstract api, should implement the event process method and component startup and shutdown method
-- *Semantics API*, semantics abstract api, provide a way to interact with the *ActorSystem* of *akka-actor* and the *backpressure* transactions
+- *Semantics API*, semantics abstract api, provide a way to interact with the *ActorSystem* of *akka-actor* and the *backpressure/start/stop* transactions (internally, they are Scala `Promse`)
 - *Internal API*, internal abstract api, just for declare the basic abstract method and implement the internal *Actor* of *akka-actor* of that component, and you should not touch any of these
 
 # License

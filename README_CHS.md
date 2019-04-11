@@ -22,13 +22,15 @@
 
 ## 内置组件列表
 
-| 组件名称                       | 类型          | 用途                      |
-| :----------------------------: | :-----------: | :-----------------------: |
-| atiesh.source.DevZero          | Source        | 生成消息内容为 "0" 的消息 |
-| atiesh.interceptor.DevNull     | Interceptor   | 拦截并丢弃所有消息        |
-| atiesh.interceptor.Transparent | Interceptor   | 拦截并放行所有消息        |
-| atiesh.sink.DevNull            | Sink          | 接收并丢弃所有消息        |
-| atiesh.utils.http.CachedProxy  | UtilComponent | 外部 Http 访问 & 缓存工具 |
+| 组件名称                       | 类型          | 用途                            |
+| :----------------------------: | :-----------: | :-----------------------------: |
+| atiesh.source.DevZero          | Source        | 生成消息内容为 "0" 的消息       |
+| atiesh.source.KafkaSource      | Source        | 消费 Kafka 消息队列             |
+| atiesh.interceptor.DevNull     | Interceptor   | 拦截并丢弃所有消息              |
+| atiesh.interceptor.Transparent | Interceptor   | 拦截并放行所有消息              |
+| atiesh.sink.DevNull            | Sink          | 接收并丢弃所有消息              |
+| atiesh.sink.KafkaSink          | Sink          | 接收并将消息写入 Kafka 消息队列 |
+| atiesh.utils.http.CachedProxy  | UtilComponent | 外部 Http 访问 & 缓存工具       |
 
 - 这些组件通常用于测试以及当作简单的组件开发示例 ( *CachedProxy* 除外)
 - *DevNull* 的 *sink* 有时可以拿来处理废弃的消息从而避免日志中出现找不到 *sink* 的噪音
@@ -54,16 +56,17 @@
 | 语义名称                           | 类型            | 用途                      |
 | :--------------------------------: | :-------------: | :-----------------------: |
 | atiesh.sink.BatchSinkSemantics     | SinkSemantics   | 批处理维护                |
-| atiesh.source.KafkaSourceSemantics | SourceSemantics | 协议支持 - Kafka Consumer |
 | atiesh.sink.HttpSinkSemantics      | SinkSemantics   | 协议支持 - Http           |
 | atiesh.sink.SyslogSinkSemantics    | SinkSemantics   | 协议支持 - Syslog         |
+| atiesh.sink.KafkaSinkSemantics     | SinkSemantics   | 协议支持 - Kafka Producer |
+| atiesh.source.KafkaSourceSemantics | SourceSemantics | 协议支持 - Kafka Consumer |
 
 ## API 层级
 
 默认情况下, 涉及语义的组件包括 *source* 和 *sink* 两大类, 而他们的接口分为三层
 
 - *Component API*, 组件接口, 定义了最基本的启动和停止以及消息处理的 *hooks* , 用于实现最终组件
-- *Semantics API*, 语义接口, 定义了和 *akka-actor* 以及 *backpressure* 事务交互的内部 *hooks* , 用于实现语义层 (所有内置的语义实现都是基于这个层面实现)
+- *Semantics API*, 语义接口, 定义了和 *akka-actor* 以及 *backpressure/start/stop* 事务交互的内部 *hooks* , 用于实现语义层 (所有内置的语义实现都是基于这个层面实现, 并且他们实际上都是 Scala 的 `Promise`)
 - *Internal API*, 内部接口, 定义了最基本的 *akka-actor* 实现以及组件的基础语义, 原则上你只能拿它参考有哪些语义而不是去在这个层面做改动
 
 # 许可
