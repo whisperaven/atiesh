@@ -24,7 +24,7 @@ import akka.http.scaladsl.model.{
   HttpResponse => AkkaHttpResponse, _ }
 import akka.util.ByteString
 // internal
-import atiesh.utils.{ Configuration, Logging, AtieshComponent, Component }
+import atiesh.utils.{ Configuration, Logging, AtieshComponent, Component, UninitializedComponentException }
 
 object CachedProxy {
   object CachedProxyOpts {
@@ -35,13 +35,12 @@ object CachedProxy {
     val DEF_MAX_RESPONSE_BODY_SIZE = 10485760 /* 10 mb */
   }
 
-  var proxyInstance: CachedProxy = _
-  def getProxyInstance: CachedProxy = {
-    if (proxyInstance == null) {
-      throw new UninitializedProxyException("cached proxy not initialized, make sure you have <cached-proxy> config section")
-    } else {
-      proxyInstance
-    }
+  var proxyInstance: Option[CachedProxy] = None
+  def getProxyInstance: CachedProxy = proxyInstance match {
+    case Some(instance) =>
+      instance
+    case _ =>
+      throw new UninitializedComponentException("cached proxy not initialized, make sure you have <cached-proxy> config section")
   }
 }
 case class RegisteredRequest[T](req: HttpRequest, expire: FiniteDuration, cacheKey: String, formatter: String => T)
@@ -79,7 +78,7 @@ class CachedProxy(name: String, cpfg: Configuration) extends AtieshComponent(nam
     tasks = new JCHashMap[String, (FiniteDuration, Cancellable)](cacheSize)
     cache = new JCHashMap[String, AnyRef](cacheSize)
 
-    proxyInstance = this.asInstanceOf[CachedProxy]
+    proxyInstance = Some(this.asInstanceOf[CachedProxy])
     this
   }
 
