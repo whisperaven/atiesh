@@ -28,8 +28,19 @@ object AliyunSLSSinkSemantics {
 
   case class ProduceRecord(project: String, logstore: String, item: LogItem,
                            topic: Option[String], source: Option[String], shardHash: Option[String])
+  object ProduceRecord {
+    def apply(project: String, logstore: String, item: LogItem): ProduceRecord = {
+      ProduceRecord(project, logstore, item, None, None, None)
+    }
+  }
+
   case class ProduceRecords(project: String, logstore: String, items: List[LogItem],
                            topic: Option[String], source: Option[String], shardHash: Option[String])
+  object ProduceRecords {
+    def apply(project: String, logstore: String, items: List[LogItem]): ProduceRecords = {
+      ProduceRecords(project, logstore, items, None, None, None)
+    }
+  }
 }
 
 trait AliyunSLSSinkSemantics extends SinkSemantics with Logging { this: Sink =>
