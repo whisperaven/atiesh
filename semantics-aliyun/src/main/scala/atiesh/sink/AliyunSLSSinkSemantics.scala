@@ -76,23 +76,28 @@ trait AliyunSLSSinkSemantics extends SinkSemantics with Logging { this: Sink =>
   }
 
   def send(event: Event)
-          (parser: Event => ProduceRecord): Future[Result] = {
+          (parser: Event => Try[ProduceRecord]): Future[Result] = {
     val promise = Promise[Result]
     val callback = createProducerCB(promise)
 
     val result = parser(event) match {
-      case ProduceRecord(proj, store, item, None, None, None) =>
-        Try { producer.send(proj, store, item, callback) }
-      case ProduceRecord(proj, store, item, Some(topic), Some(source), None) =>
-        Try { producer.send(proj, store, topic, source, item, callback) }
-      case ProduceRecord(proj, store, item, Some(topic), Some(source), Some(hash)) =>
-        Try { producer.send(proj, store, topic, source, hash, item, callback) }
-      case _ =>
-        Try { throw new SinkInvalidEventException(
-          "bad event parser response, cannot invoke send, the parser should return a " +
-          "ProduceRecord instance which contains <project, logstore, item> or " +
-          "<project, logstore, item, topic source> or " +
-          "<project, logstore, item, topic, source, shardhash>") }
+      case Success(record) =>
+        record match {
+          case ProduceRecord(proj, store, item, None, None, None) =>
+            Try { producer.send(proj, store, item, callback) }
+          case ProduceRecord(proj, store, item, Some(topic), Some(source), None) =>
+            Try { producer.send(proj, store, topic, source, item, callback) }
+          case ProduceRecord(proj, store, item, Some(topic), Some(source), Some(hash)) =>
+            Try { producer.send(proj, store, topic, source, hash, item, callback) }
+          case _ =>
+            Try { throw new SinkInvalidEventException(
+              "bad event parser response, cannot invoke send, the parser should return a " +
+              "ProduceRecord instance which contains <project, logstore, item> or " +
+              "<project, logstore, item, topic source> or " +
+              "<project, logstore, item, topic, source, shardhash>") }
+          }
+      case Failure(exc) =>
+        Try { throw exc }
     }
 
     result match {
@@ -102,23 +107,28 @@ trait AliyunSLSSinkSemantics extends SinkSemantics with Logging { this: Sink =>
   }
 
   def send(events: List[Event])
-          (parser: List[Event] => ProduceRecords): Future[Result] = {
+          (parser: List[Event] => Try[ProduceRecords]): Future[Result] = {
     val promise = Promise[Result]
     val callback = createProducerCB(promise)
 
     val result = parser(events) match {
-      case ProduceRecords(proj, store, items, None, None, None) =>
-        Try { producer.send(proj, store, items.asJava, callback) }
-      case ProduceRecords(proj, store, items, Some(topic), Some(source), None) =>
-        Try { producer.send(proj, store, topic, source, items.asJava, callback) }
-      case ProduceRecords(proj, store, items, Some(topic), Some(source), Some(hash)) =>
-        Try { producer.send(proj, store, topic, source, hash, items.asJava, callback) }
-      case _ =>
-        Try { throw new SinkInvalidEventException(
-          "bad event parser response, cannot invoke send, the parser should return a " +
-          "ProduceRecords instance which contains <project, logstore, items> or " +
-          "<project, logstore, items, topic source> or " +
-          "<project, logstore, items, topic, source, shardhash>") }
+      case Success(record) =>
+        record match {
+          case ProduceRecords(proj, store, items, None, None, None) =>
+            Try { producer.send(proj, store, items.asJava, callback) }
+          case ProduceRecords(proj, store, items, Some(topic), Some(source), None) =>
+            Try { producer.send(proj, store, topic, source, items.asJava, callback) }
+          case ProduceRecords(proj, store, items, Some(topic), Some(source), Some(hash)) =>
+            Try { producer.send(proj, store, topic, source, hash, items.asJava, callback) }
+          case _ =>
+            Try { throw new SinkInvalidEventException(
+              "bad event parser response, cannot invoke send, the parser should return a " +
+              "ProduceRecords instance which contains <project, logstore, items> or " +
+              "<project, logstore, items, topic source> or " +
+              "<project, logstore, items, topic, source, shardhash>") }
+        }
+      case Failure(exc) =>
+        Try { throw exc }
     }
 
     result match {
