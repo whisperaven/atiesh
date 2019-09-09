@@ -6,6 +6,8 @@ package atiesh.utils.http
 
 // java
 import java.util.concurrent.{ ConcurrentHashMap => JCHashMap }
+import java.util.function.BiFunction
+import java.util.concurrent.Semaphore
 // scala
 import scala.util.{ Try, Success, Failure }
 import scala.concurrent.{ ExecutionContext, Await, Future }
@@ -54,7 +56,7 @@ class CachedProxy(name: String, cpfg: Configuration) extends AtieshComponent(nam
   var http: HttpExt = _
   var scheduler: Scheduler = _
 
-  var tasks: JCHashMap[String, (FiniteDuration, Cancellable)] = _
+  var tasks: JCHashMap[String, (FiniteDuration, Semaphore, Cancellable)] = _
   var cache: JCHashMap[String, AnyRef] = _
   val nothing = new AnyRef
 
@@ -75,7 +77,7 @@ class CachedProxy(name: String, cpfg: Configuration) extends AtieshComponent(nam
     materializer = ActorMaterializer()
     scheduler = system.scheduler
 
-    tasks = new JCHashMap[String, (FiniteDuration, Cancellable)](cacheSize)
+    tasks = new JCHashMap[String, (FiniteDuration, Semaphore, Cancellable)](cacheSize)
     cache = new JCHashMap[String, AnyRef](cacheSize)
 
     proxyInstance = Some(this.asInstanceOf[CachedProxy])
@@ -88,35 +90,41 @@ class CachedProxy(name: String, cpfg: Configuration) extends AtieshComponent(nam
     cacheKeyGen: HttpRequest => String)(formatter: String => T):
     RegisteredRequest[T] = {
     val cacheKey = cacheKeyGen(req)
-    if (!tasks.containsKey(cacheKey)) {
-      val task = scheduler.schedule(expire, expire)({
-        Await.ready(updateCache(req, cacheKey)(formatter), Duration.Inf).value.get match {
-          case Success(cachedValue) =>
-            logger.debug("scheduled cache update successful, got value {}", cachedValue)
-          case Failure(exc) =>
-            logger.error("scheduled cache update failed, continue using expired cache", exc)
+    val injector = new BiFunction[String, (FiniteDuration, Semaphore, Cancellable), (FiniteDuration, Semaphore, Cancellable)]{
+      override def apply(key: String, value: (FiniteDuration, Semaphore, Cancellable)): (FiniteDuration, Semaphore, Cancellable) = {
+        if (value == null) {
+          val task = scheduler.schedule(expire, expire)({
+            Await.ready(updateCache(req, cacheKey)(formatter), Duration.Inf).value.get match {
+              case Success(cachedValue) =>
+                logger.debug("scheduled cache update successful, got value {}", cachedValue)
+              case Failure(exc) =>
+                logger.error("scheduled cache update failed, continue using expired cache", exc)
+            }
+          })
+          val slot = new Semaphore(1)
+          (expire, slot, task)
+        } else {
+          val (e, a, t) = value
+          if (e > expire) {
+            logger.info(
+              "cache update task update successed with lower expire <{}> and cacheKey <{}>, " +
+              "total cache slot(s): <{}>",
+              expire,
+              cacheKey,
+              tasks.size)
+            (expire, a, t)
+          } else {
+            logger.debug(
+              "ignore cache update task with longer or equality expire <{}> and same cacheKey <{}>",
+              expire,
+              cacheKey)
+            value
+          }
         }
-      })
-      tasks.put(cacheKey, (expire, task))
-      logger.debug(
-        "cache update task create successful with expire <{}> and cacheKey <{}>, " +
-        "total cache slot(s): <{}>",
-        expire,
-        cacheKey,
-        tasks.size)
-    } else {
-      val (e, t) = tasks.get(cacheKey)
-      if (e > expire) {
-        tasks.put(cacheKey, (expire, t))
-        logger.debug(
-          "cache update task update successed with lower expire <{}> and cacheKey <{}>, " +
-          "total cache slot(s): <{}>",
-          expire,
-          cacheKey,
-          tasks.size)
       }
     }
-    RegisteredRequest(req, expire, cacheKey, formatter)
+    val (currentExpire, _, _) = tasks.compute(cacheKey, injector)
+    RegisteredRequest(req, currentExpire, cacheKey, formatter)
   }
 
   val responseErrorHandler: PartialFunction[Throwable, ByteString] = {
@@ -128,24 +136,49 @@ class CachedProxy(name: String, cpfg: Configuration) extends AtieshComponent(nam
   }
 
   def updateCache[T](req: HttpRequest, cacheKey: String)(formatter: String => T): Future[T] = {
-    val request = AkkaHttpRequest(req.akkaHttpMethod, req.akkaUri, req.akkaHttpHeaders, req.akkaHttpEntity)
-    logger.debug("updating cache - creating request for <{}> to remote <{}>", cacheKey, req.uri)
-    http.singleRequest(request).flatMap({
-      case AkkaHttpResponse(StatusCodes.OK, _, entity, _) =>
-        entity.withSizeLimit(maxResponseBodySize).dataBytes.recover(responseErrorHandler).runFold(ByteString(""))(_ ++ _)(materializer)
-          .map(bs => {
-            logger.debug("updating cache - formatting api data with user formatter -> <{}>", bs.utf8String)
-            val content = formatter(bs.utf8String)
-            logger.debug("cache updated with key -> {}, req -> {}, value -> {}", cacheKey, req, content)
-            cache.put(cacheKey, content.asInstanceOf[AnyRef])
-            content
-          })
-      case AkkaHttpResponse(status, _, entity, _) =>
-        entity.withSizeLimit(maxResponseBodySize).dataBytes.recover(responseErrorHandler).runFold(ByteString(""))(_ ++ _)(materializer)
-          .map(bs => {
-            throw new UnexceptedHttpResponseException(s"got unexpected http response ${status} with message ${bs.utf8String}")
-          })
-    })
+    val (_, slot, _) = tasks.get(cacheKey)
+
+    if (slot.tryAcquire()) {
+      logger.debug("updating cache - acquire slot and creating request for <{}> to remote <{}>", cacheKey, req.uri)
+
+      http.singleRequest(AkkaHttpRequest(req.akkaHttpMethod, req.akkaUri, req.akkaHttpHeaders, req.akkaHttpEntity)).flatMap({
+        case AkkaHttpResponse(StatusCodes.OK, _, entity, _) =>
+          entity.withSizeLimit(maxResponseBodySize).dataBytes.recover(responseErrorHandler).runFold(ByteString(""))(_ ++ _)(materializer)
+            .map(bs => {
+              logger.debug("updating cache - formatting api data with user formatter -> <{}>", bs.utf8String)
+              val content = formatter(bs.utf8String)
+              logger.debug("cache updated with key -> {}, req -> {}, value -> {}", cacheKey, req, content)
+              cache.put(cacheKey, content.asInstanceOf[AnyRef])
+              content
+            })
+        case AkkaHttpResponse(status, _, entity, _) =>
+          entity.withSizeLimit(maxResponseBodySize).dataBytes.recover(responseErrorHandler).runFold(ByteString(""))(_ ++ _)(materializer)
+            .map(bs => {
+              throw new UnexceptedHttpResponseException(s"got unexpected http response ${status} with message ${bs.utf8String}")
+            })
+      }).andThen({
+        case _ =>
+          logger.debug("release cache update slot for <{}> to remote <{}>", cacheKey, req.uri)
+          slot.release()
+      })
+    } else {
+      logger.debug("waiting for cache update - request for <{}> to remote <{}>", cacheKey, req.uri)
+
+      Future[T]({
+        slot.acquire() /* block until update finish */
+        val content = cache.getOrDefault(cacheKey, nothing)
+        if (content == nothing) {
+          throw new RuntimeException(s"cache update for <${cacheKey}> to remote <${req.uri}> failed")
+        } else {
+          logger.debug(s"cache update for <${cacheKey}> to remote <${req.uri}> finished")
+          content.asInstanceOf[T]
+        }
+      }).andThen({
+        case _ =>
+          logger.debug("release cache wait slot for <{}> to remote <{}>", cacheKey, req.uri)
+          slot.release()
+      })
+    }
   }
 
   def validateCache[T](register: RegisteredRequest[T]): Try[T] = {
@@ -172,7 +205,7 @@ class CachedProxy(name: String, cpfg: Configuration) extends AtieshComponent(nam
 
   def shutdown(): Unit = {
     tasks.entrySet.asScala.foldLeft(())((r, e) => {
-      val (expire, task) = e.getValue()
+      val (_, _, task) = e.getValue()
       if (task.cancel()) {
         logger.debug("canceled proxy task with cacheKey <{}>", e.getKey)
       } else {
