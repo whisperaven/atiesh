@@ -7,7 +7,7 @@ import sbt.Keys.{ credentials, publishTo }
 
 lazy val common = Seq(
   organization := "io.0ops",
-  version := "2.2.0",
+  version := "2.2.1",
   scalaVersion := "2.11.12",
 
   publishTo := Some(Resolver.file("file",  new File(Path.userHome.absolutePath+"/.m2/repository"))),
