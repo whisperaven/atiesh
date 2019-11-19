@@ -1,0 +1,11 @@
+*.swp
+*.idea
+
+_run
+_tmp
+
+target/
+
+*.gz
+*.tgz
+*.rpm

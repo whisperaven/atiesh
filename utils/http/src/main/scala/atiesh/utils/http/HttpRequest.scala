@@ -1,171 +1,146 @@
+/*
+ * Copyright (C) Hao Feng
+ */
+
 package atiesh.utils.http
 
 // scala
-import scala.collection.immutable
-// java
-import java.nio.charset.StandardCharsets
+import scala.language.implicitConversions
 // akka
-import akka.http.scaladsl.model.{
-  HttpMethod => AkkaHttpMethod,
-  HttpMethods => AkkaHttpMethods,
-  ContentType => AkkaContentType,
-  ContentTypes => AkkaContentTypes,
-  HttpRequest => AkkaHttpRequest, _ }
+import akka.http.scaladsl.model.{ HttpEntity => AkkaHttpEntity,
+                                  HttpRequest => AkkaHttpRequest,
+                                  ContentTypes => AkkaContentTypes }
 import akka.util.ByteString
 // internal
 import atiesh.utils.Logging
 
-object HttpMethods extends Enumeration {
-  type HttpMethod = Value
-  val GET, POST, PUT, DELETE = Value
-}
-import HttpMethods._
+object HttpRequest extends Logging {
+  import HttpMessage._
 
-case class HttpRequest(
-  uri:     String,
-  queries: Seq[(String, String)],
-  method:  HttpMethod,
-  headers: Map[String, String],
-  body:    Array[Byte]) extends Logging {
-
-  /*
-   * using this Option, we can remove the Content-Type header from headers and
-   *    also make sure the akkaContentType block can access this header value.
-   * by doing this, we can prevent the akka WARN:
-   *    - Explicitly set HTTP header 'Content-Type: xxx' is ignored,
-   *        explicit `Content-Type` header is not allowed.
-   *        Set `HttpRequest.entity.contentType` instead.
-   */
-  var _content_type: Option[String] = None
-
-  val akkaUri = {
-    if (queries.isEmpty) Uri(uri)
-    else Uri(uri).withQuery(Uri.Query(queries: _*))
+  object implicits {
+    implicit def asAkkaRequest(req: HttpRequest): AkkaHttpRequest =
+      req.akkaHttpRequest
   }
 
-  val akkaHttpMethod = {
-    if (method == GET) AkkaHttpMethods.GET
-    else if (method == POST) AkkaHttpMethods.POST
-    else if (method == PUT) AkkaHttpMethods.PUT
-    else AkkaHttpMethods.DELETE
-  }
+  /* bytes body with full args - queries as List */
+  def apply(
+    uri:     String,
+    queries: Seq[(String, String)],
+    method:  HttpMethods.HttpMethod,
+    headers: Map[String, String],
+    body:    Array[Byte]): HttpRequest =
+    HttpRequest(uri, queries, method, headers, ByteString(body))
 
-  val akkaHttpHeaders = headers.foldLeft(immutable.Seq[HttpHeader]())({
-    case (hs, (k, v)) =>
-      if (k.toLowerCase == "content-type") {
-        _content_type = Some(v.toLowerCase)
-        hs
-      } else {
-        import HttpHeader.ParsingResult._
-        HttpHeader.parse(k, v) match {
-          case Ok(h, errs) =>
-            if (errs.length != 0 ) {
-              val errstr = errs.foldLeft("")((summary, ei) => { summary + ei.format(true) })
-              logger.warn("got error during http header parse for outgoing request {}, raw header was <{}>", errstr, h)
-            }
-            hs :+ h
-
-          case Error(err) =>
-            logger.error("ignore bad http header of outgoing request, {}", err.format(true))
-            hs
-        }
-      }
-  })
-
-  val akkaContentType = {
-    if (_content_type.isEmpty) {
-      _content_type = headers
-        .find({ case (k, v) => k.toLowerCase == "content-type" })
-        .map({ case (_, t) => t.toLowerCase })
-    }
-
-    _content_type.map(contentType => {
-      contentType match {
-        case c if c == "application/json" => AkkaContentTypes.`application/json`
-        case c if c == "application/octet-stream" => AkkaContentTypes.`application/octet-stream`
-        case c if c == "application/grpc+proto" => AkkaContentTypes.`application/grpc+proto`
-        case c if c == "text/plain(UTF-8)" => AkkaContentTypes.`text/plain(UTF-8)`
-        case c if c == "text/html(UTF-8)" => AkkaContentTypes.`text/html(UTF-8)`
-        case c if c == "text/xml(UTF-8)" => AkkaContentTypes.`text/xml(UTF-8)`
-        case c if c == "text/csv(UTF-8)" => AkkaContentTypes.`text/csv(UTF-8)`
-        case _ => AkkaContentTypes.NoContentType
-      }
-    }).getOrElse(AkkaContentTypes.NoContentType)
-  }
-
-  val akkaHttpEntity = {
-    if (body.isEmpty) HttpEntity.Empty
-    else HttpEntity(akkaContentType, ByteString(body))
-  }
-}
-
-object HttpRequest {
-  val charset: String = StandardCharsets.UTF_8.name()
-
-  val emptyBody   = Array[Byte]()
-  val emptyQuery  = List[(String, String)]()
-  val emptyHeader = Map[String, String]()
-
-  /* queries as Map */
+  /* bytes body with full args - queries as Map */
   def apply(
     uri:     String,
     queries: Map[String, String],
-    method:  HttpMethod,
+    method:  HttpMethods.HttpMethod,
     headers: Map[String, String],
-    body:    Array[Byte]): HttpRequest = HttpRequest(uri, queries.toList, method, headers, body)
+    body:    Array[Byte]): HttpRequest =
+    HttpRequest(uri, queries.toList, method, headers, ByteString(body))
 
-  /* no body content - GET without queres & headers */
-  def apply(uri: String): HttpRequest = HttpRequest(uri, emptyQuery, GET, emptyHeader, emptyBody)
+  /* simplest GET - without queres & headers */
+  def apply(uri: String): HttpRequest =
+    HttpRequest(
+      uri, emptyQuery, HttpMethods.GET, emptyHeader, ByteString.empty)
 
-  /* string as body - request without queries */
+  /* request without queries and headers */
   def apply(
     uri: String,
-    method: HttpMethod,
+    method: HttpMethods.HttpMethod,
+    body: String): HttpRequest =
+    HttpRequest(
+      uri, emptyQuery, method, emptyHeader, ByteString(body, charset))
+  def apply(
+    uri: String,
+    method: HttpMethods.HttpMethod,
+    body: Array[Byte]): HttpRequest =
+    HttpRequest(uri, emptyQuery, method, emptyHeader, ByteString(body))
+
+  /* request without queries */
+  def apply(
+    uri: String,
+    method: HttpMethods.HttpMethod,
     headers: Map[String, String],
-    body: String): HttpRequest = HttpRequest(uri, emptyQuery, method, headers, body.getBytes(charset))
-
-  /* string as body - request without headers */
+    body: String): HttpRequest =
+    HttpRequest(
+      uri, emptyQuery, method, headers, ByteString(body, charset))
   def apply(
     uri: String,
-    quires: Map[String, String],
-    method: HttpMethod,
-    body: String): HttpRequest = HttpRequest(uri, quires, method, emptyHeader, body.getBytes(charset))
-
-  def apply(
-    uri: String,
-    quires: Seq[(String, String)],
-    method: HttpMethod,
-    body: String): HttpRequest = HttpRequest(uri, quires, method, emptyHeader, body.getBytes(charset))
-
-  /* string as body - request without queries and headers */
-  def apply(
-    uri: String,
-    method: HttpMethod,
-    body: String): HttpRequest = HttpRequest(uri, emptyQuery, method, emptyHeader, body.getBytes(charset))
-
-  /* bytes as body - request without queries */
-  def apply(
-    uri: String,
-    method: HttpMethod,
+    method: HttpMethods.HttpMethod,
     headers: Map[String, String],
-    body: Array[Byte]): HttpRequest = HttpRequest(uri, emptyQuery, method, headers, body)
+    body: Array[Byte]): HttpRequest =
+    HttpRequest(uri, emptyQuery, method, headers, ByteString(body))
 
-  /* bytes as body - request without headers */
+  /* request without headers: queries as Map / queries as Seq */
   def apply(
     uri: String,
-    quires: Map[String, String],
-    method: HttpMethod,
-    body: Array[Byte]): HttpRequest = HttpRequest(uri, quires, method, emptyHeader, body)
-
+    queries: Map[String, String],
+    method: HttpMethods.HttpMethod,
+    body: String): HttpRequest =
+    HttpRequest(
+      uri, queries.toList, method, emptyHeader, ByteString(body, charset))
   def apply(
     uri: String,
-    quires: Seq[(String, String)],
-    method: HttpMethod,
-    body: Array[Byte]): HttpRequest = HttpRequest(uri, quires, method, emptyHeader, body)
-
-  /* bytes as body - request without queries and headers */
+    queries: Seq[(String, String)],
+    method: HttpMethods.HttpMethod,
+    body: String): HttpRequest =
+    HttpRequest(
+      uri, queries, method, emptyHeader, ByteString(body, charset))
   def apply(
     uri: String,
-    method: HttpMethod,
-    body: Array[Byte]): HttpRequest = HttpRequest(uri, emptyQuery, method, emptyHeader, body)
+    queries: Map[String, String],
+    method: HttpMethods.HttpMethod,
+    body: Array[Byte]): HttpRequest =
+    HttpRequest(uri, queries.toList, method, emptyHeader, ByteString(body))
+  def apply(
+    uri: String,
+    queries: Seq[(String, String)],
+    method: HttpMethods.HttpMethod,
+    body: Array[Byte]): HttpRequest =
+    HttpRequest(uri, queries, method, emptyHeader, ByteString(body))
+}
+
+/**
+ * Atiesh http request representation, a wrapper for akka-http.
+ */
+final case class HttpRequest(val uri:     String,
+                             val queries: Seq[(String, String)],
+                             val method:  HttpMethods.HttpMethod,
+                             val headers: Map[String, String],
+                             val body:    ByteString) {
+  import HttpMessage._
+
+  lazy val stringBody = body.decodeString(charset)
+
+  val akkaHttpMethod = method
+
+  lazy val akkaUri = parseUri(queries, uri)
+  lazy val akkaHttpHeaders = parseHeaders(headers)
+
+  /*
+   * We should remove the Content-Type header from headers and also make
+   * sure the akkaContentType block can access the Content-Type header value.
+   *
+   * By doing this, we can prevent the akka WARN:
+   *  - Explicitly set HTTP header 'Content-Type: xxx' is ignored,
+   *      explicit `Content-Type` header is not allowed.
+   *      Set `HttpRequest.entity.contentType` instead.
+   */
+  lazy val akkaContentType = headers
+    .find({ case (k, v) => k.toLowerCase == "content-type" })
+    .map({ case (_, t) => t.toLowerCase })
+    .map(c => parseContentType(c))
+    .getOrElse(defaultContentType)
+
+  lazy val akkaHttpEntity = {
+    if (body.isEmpty) AkkaHttpEntity.Empty
+    else AkkaHttpEntity(akkaContentType, body)
+  }
+
+  lazy val akkaHttpRequest: AkkaHttpRequest = AkkaHttpRequest(akkaHttpMethod,
+                                                              akkaUri,
+                                                              akkaHttpHeaders,
+                                                              akkaHttpEntity)
 }
