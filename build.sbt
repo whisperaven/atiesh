@@ -7,34 +7,45 @@ import sbt.Keys.{ credentials, publishTo }
 
 lazy val common = Seq(
   organization := "io.0ops",
-  version := "2.2.1",
+  /* master branch stable version => 2.2.1 (current)
+   *   version := "2.2.1", */
+  /* develop branch unstable test 2.3.x => stable release 2.4.x */
+  version := "2.3.0",
   scalaVersion := "2.11.12",
 
-  publishTo := Some(Resolver.file("file",  new File(Path.userHome.absolutePath+"/.m2/repository"))),
-  credentials += Credentials(Path.userHome / ".sbt" / ".credentials")
+  /* BuildPaths.defaultGlobalBase => ~/.sbt */
+  credentials += Credentials(BuildPaths.defaultGlobalBase / ".credentials")
 )
 
+/*
+ * default builds:
+ *  => core
+ *  => httputils => http
+ *  => kafka
+ */
 lazy val distribution = Project(
   id = "atiesh-distribution",
   base = file(".")
-).aggregate(core, httputils, kafka, http, syslog)
+).aggregate(core, httputils, kafka, http)
  .settings(common)
 
 /* atiesh core project */
 lazy val dependencies = Seq(
-    // configparser
-    "com.typesafe"                % "config"              % "1.3.2",
+    // akka-actor
+    "com.typesafe.akka"          %% "akka-actor"          % "2.5.26",
     // kamon
-    "io.kamon"                   %% "kamon-core"          % "1.0.0" 
+    "io.kamon"                   %% "kamon-core"          % "2.0.0"
       exclude("org.slf4j", "slf4j-api") exclude("org.slf4j", "slf4j-log4j12")
       exclude("com.typesafe", "config"),
-    "io.kamon"                   %% "kamon-system-metrics"% "1.0.0",
-    // akka-actor
-    "com.typesafe.akka"          %% "akka-actor"          % "2.5.12",
+    "io.kamon"                   %% "kamon-system-metrics"% "2.0.0",
+    /* kamon reporter dependency for test only */
+    // "io.kamon"                   %% "kamon-prometheus"    % "2.0.0",
     // logger
     "ch.qos.logback"              % "logback-classic"     % "1.2.3", // scalalogging docs
     "com.typesafe.scala-logging" %% "scala-logging"       % "3.9.0"
 )
+
+/* atiesh core framework */
 lazy val core = (project in file("core"))
   .settings(
     common,
@@ -42,19 +53,19 @@ lazy val core = (project in file("core"))
     libraryDependencies ++= dependencies
   )
 
-/* atiesh utils http */
+/* atiesh utils - http */
 lazy val httputils = (project in file("utils/http"))
   .settings(
     common,
     name := "atiesh-utils-http",
     libraryDependencies ++= Seq(
-      "com.typesafe.akka" %% "akka-stream" % "2.5.12"
+      "com.typesafe.akka" %% "akka-stream" % "2.5.26"
         exclude("com.typesafe", "config"),
-      "com.typesafe.akka" %% "akka-http" % "10.1.1",
+      "com.typesafe.akka" %% "akka-http" % "10.1.10",
     )
   ).dependsOn(core)
 
-/* atiesh semantics kafka */
+/* atiesh semantics - kafka */
 lazy val kafka = (project in file("semantics-kafka"))
   .settings(
     common,
@@ -67,19 +78,27 @@ lazy val kafka = (project in file("semantics-kafka"))
     )
   ).dependsOn(core)
 
-/* atiesh semantics http */
+/* atiesh semantics - http */
 lazy val http = (project in file("semantics-http"))
   .settings(
     common,
     name := "atiesh-semantics-http",
     libraryDependencies ++= Seq(
-      "com.typesafe.akka" %% "akka-stream" % "2.5.12"
+      "com.typesafe.akka" %% "akka-stream" % "2.5.26"
         exclude("com.typesafe", "config"),
-      "com.typesafe.akka" %% "akka-http" % "10.1.1",
+      "com.typesafe.akka" %% "akka-http" % "10.1.10",
     )
   ).dependsOn(httputils)
 
-/* atiesh semantics syslog (experiment) */
+/*
+ * atiesh semantics - syslog (experiment),
+ *      we don't build this by default
+ *
+ * you can build it manual via sbt shell:
+ *      sbt> project syslog
+ *      sbt:atiesh-semantics-syslog> clean
+ *      sbt:atiesh-semantics-syslog> package (or publish)
+ */
 lazy val syslog = (project in file("semantics-syslog"))
   .settings(
     common,
@@ -90,7 +109,7 @@ lazy val syslog = (project in file("semantics-syslog"))
   ).dependsOn(core)
 
 /*
- * atiesh semantics aliyun,
+ * atiesh semantics - aliyun,
  *      too much deps with conflicts warns,
  *      we don't build this by default
  *

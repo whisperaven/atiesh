@@ -1,4 +1,4 @@
-/*
+/**
  * Copyright (C) Hao Feng
  */
 
@@ -11,132 +11,185 @@ import java.util.concurrent.atomic.AtomicBoolean
 import scala.util.{ Try, Success, Failure }
 import scala.concurrent.{ Promise, Await }
 import scala.concurrent.duration._
-// typesafe akka-actor
+// akka
 import akka.actor.ActorSystem
 // internal
-import atiesh.statement.Ready
+import atiesh.component.{ Component, ExtendedComponent }
+import atiesh.statement.{ Ready, Closed }
+import atiesh.metrics.{ Metrics, ComponentMetrics }
 import atiesh.source.Source
 import atiesh.interceptor.Interceptor
 import atiesh.sink.Sink
-import atiesh.utils.{ Configuration, Component, ClassLoader, Logging }
-import atiesh.metrics.Metrics
+import atiesh.utils.{ Configuration, Extension, Logging,
+                      ConfigParseException }
 
-object AtieshServer extends Logging {
-  val getComponentName: String = "atiesh"
-  def getComponentName(componentName: String): String = s"${getComponentName}.${componentName}"
+trait ServerType {
+  final val componentType: String = "atiesh"
+}
 
-  def initializeComponent[C](cfg: Configuration)(initComp: Configuration => Try[C]): C =
-    initializeComponent[C](cfg, None)(initComp)
-  def initializeComponent[C](cfg: Configuration, componentName: String)(initComp: Configuration => Try[C]): C =
-    initializeComponent[C](cfg, Some(getComponentName(componentName)))(initComp)
+object AtieshServer extends ServerType with Logging {
+  private[server] def componentConfiguration(cType: String): String =
+    s"${componentType}.${cType}"
 
-  def initializeComponent[C](cfg: Configuration, componentName: Option[String])(initComp: Configuration => Try[C]): C = {
-    (cfg.getSection(componentName.getOrElse(getComponentName)) match {
+  private[server] def initializeComponents[C](
+    cfg: Configuration,
+    cType: String)(init: Configuration => Try[List[C]]): List[C] = {
+    (cfg.getSection(componentConfiguration(cType)) match {
       case Some(c) =>
-        initComp(c)
+        init(c)
       case None =>
-        logger.error("bad configurations, missing <{}> section, initialize aborted", componentName)
-        sys.exit(2)
+        throw new ConfigParseException(
+          s"bad configurations, missing <${componentConfiguration(cType)}> " +
+          s"section")
     }) match {
       case Success(comps) =>
         comps
       case Failure(exc) =>
-        logger.error("got unexpected error during server initialize, initialize aborted", exc)
-        sys.exit(2)
+        throw exc
     }
   }
 
-  def apply(cfg: Configuration): AtieshServer = {
-    new AtieshServer(cfg)
+  private[server] def startComponents(
+    components: List[ExtendedComponent]): Unit = {
+    components.map(c => {
+      val p = Promise[Ready]()
+      logger.info("atiesh server starting {} component <{}>",
+                  c.componentType, c.getName)
+      (c -> c.start(p))
+    }).foreach({
+      case (c, f) =>
+        Await.ready(f, Duration.Inf).value.get match {
+          case Success(_) =>
+            logger.info("atiesh {} <{}> started", c.componentType, c.getName)
+          case Failure(exc) =>
+            throw exc
+        }
+    })
+  }
+
+  private[server] def stopComponents(
+    components: List[ExtendedComponent]): Unit = {
+    components.map(c => {
+      val p = Promise[Closed]()
+      logger.info("atiesh server stopping {} component <{}>",
+                  c.componentType, c.getName)
+      (c -> c.stop(p))
+    }).foreach({
+      case (c, f) =>
+        Await.ready(f, Duration.Inf).value.get match {
+          case Success(_) =>
+            logger.info("atiesh {} <{}> stopped", c.componentType, c.getName)
+          case Failure(exc) =>
+            throw exc
+        }
+    })
   }
 }
 
-class AtieshServer(cfg: Configuration) extends Logging {
+/**
+ * Atiesh main server that assemble all components.
+ */
+class AtieshServer(cfg: Configuration)
+  extends Component
+  with ServerType
+  with ComponentMetrics
+  with Logging {
   import AtieshServer._
 
-  private val startingUp = new AtomicBoolean(true)
-  private val shuttingDown = new AtomicBoolean(false)
+  private[this] val startingUp = new AtomicBoolean(true)
+  private[this] val shuttingDown = new AtomicBoolean(false)
+  private[this] val shutdownLatch = new CountDownLatch(1)
 
-  private var shutdownLatch = new CountDownLatch(1)
-  private implicit val system = ActorSystem("atiesh_actorsystem", cfg.unwrapped)
+  private[this] var extensions: List[Extension] = _
+  private[this] var sinks: List[Sink] = _
+  private[this] var interceptors: List[Interceptor] = _
+  private[this] var sources: List[Source] = _
 
-  private var components: List[Component] = _
-  private var sinks: List[Sink] = _
-  private var sources: List[Source] = _
-  private var interceptors: List[Interceptor] = _
+  final private[this] implicit val system =
+    ActorSystem("guardian", cfg.unwrapped)
 
-  def startup() {
-    logger.info("initialize atiesh server")
-
-    /*
-     * initialize metrics components first
-     */
-    initializeComponent(cfg, Metrics.getComponentName)(c => { Metrics.initializeMetrics(c)(cfg) })
-
-    /*
-     * initialize helper components before source & interceptor & sink
-     *    other components may depends on these helper components like CachedProxy
-     */
-    components = initializeComponent(cfg)(c => { Component.initializeComponents(c) })
-
-    interceptors = initializeComponent(cfg, Interceptor.getComponentName)(c => { Interceptor.initializeComponents(c) })
-    sinks = initializeComponent(cfg, Sink.getComponentName)(c => { Sink.initializeComponents(c) })
-    sources = initializeComponent(cfg, Source.getComponentName)(c => { Source.initializeComponents(c, interceptors, sinks) })
-
-    sinks
-      .map(s => {
-        val p = Promise[Ready]()
-        logger.info("atiesh server initialize components, starting sink <{}>", s.getName)
-        (s -> s.open(p))
-      }).foreach({ case (sink, readyFuture) =>
-        Await.ready(readyFuture, Duration.Inf).value.get match {
-          case Success(ready) =>
-            logger.info("atiesh sink <{}> opened", ready.component)
-          case Failure(exc) =>
-            throw exc
-        }
-      })
-
-    sources
-      .map(s => {
-        val p = Promise[Ready]()
-        logger.info("atiesh server initialize components, starting source <{}>", s.getName)
-        (s -> s.open(p))
-      }).foreach({ case (source, readyFuture) =>
-        Await.ready(readyFuture, Duration.Inf).value.get match {
-          case Success(ready) =>
-            logger.info("atiesh source <{}> opened", ready.component)
-          case Failure(exc) =>
-            throw exc
-        }
-      })
-
-    logger.info("atiesh server started")
-
-    shutdownLatch = new CountDownLatch(1)
-    startingUp.set(false)
-  }
+  final def getName = componentType
+  final def getConfiguration = cfg
 
   def awaitShutdown(): Unit = shutdownLatch.await()
 
-  def shutdown(): Unit = {
+  def assemble() {
+    logger.info("assembling atiesh component")
+
+    try {
+      /**
+       * Components initialize order:
+       *  1st - metrics
+       *  2nd - extensions
+       *  3rd - interceptors
+       *  4th - sinks
+       *  5th - sources
+       */
+      Metrics.initializeMetrics(cfg)
+      extensions =
+        initializeComponents(cfg, Extension.componentType)(c => {
+          Extension.initializeComponents(c)
+        })
+
+      interceptors =
+        initializeComponents(cfg, Interceptor.componentType)(c => {
+          Interceptor.initializeComponents(c)
+        })
+
+      sinks =
+        initializeComponents(cfg, Sink.componentType)(c => {
+          Sink.initializeComponents(c)
+        })
+
+      sources = initializeComponents(cfg, Source.componentType)(c => {
+          Source.initializeComponents(c, interceptors, sinks)
+        })
+
+      logger.info("starting atiesh component")
+
+      startComponents(extensions)
+      startComponents(sinks)
+      startComponents(sources)
+    } catch {
+      case exc: Throwable =>
+        logger.error("fatal error during atiesh initialize & " +
+                     "startup, prepare to shutdown", exc)
+        startingUp.set(false)
+        disassemble()
+    }
+    metricsComponentStartTimestampGauge.update(System.currentTimeMillis)
+    startingUp.set(false)
+
+    logger.info("atiesh server assembled")
+  }
+
+  def disassemble(): Unit = {
     if (startingUp.get) {
-      throw new IllegalStateException("atiesh server is still starting up, cannot shut down!")
+      throw new IllegalStateException("atiesh server is still starting up, " +
+                                      "cannot shut down (probably killed " +
+                                      "during startup)")
     }
 
-    if (shuttingDown.compareAndSet(false, true)) {
+    if (shutdownLatch.getCount > 0 &&
+        shuttingDown.compareAndSet(false, true)) {
       logger.info("shutting down atiesh server")
 
-      Source.shutdownComponents(sources)
-      Sink.shutdownComponents(sinks)
-      Component.shutdownComponents(components)
+      stopComponents(sources)
+      stopComponents(sinks)
+      stopComponents(extensions)
 
       Await.ready(system.terminate(), Duration.Inf).value.get match {
         case Success(r) =>
-          logger.info("atiesh server shutdonw gracefully")
+          logger.info("atiesh server shutdonw completed")
         case Failure(exc) =>
-          logger.error("got unexpected exception during server shutting down, atiesh server force terminated", exc)
+          logger.error("got unexpected exception during server " +
+                       "shutting down, atiesh server force terminated", exc)
       }
+
+      logger.info("stopping atiesh kamon metrics modules")
+      Metrics.shutdownMetrics()
+
+      shuttingDown.set(false)
       shutdownLatch.countDown()
     }
   }
