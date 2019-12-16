@@ -12,7 +12,7 @@ object KafkaMetrics {
 
   def metricsKafkaTopicPartitionFromKey(key: String): (String, String) =
     key.split(metricsKafkaTopicPartitionKeySeparator) match {
-      case Array(topic, partition) => (topic, partition)
+      case Array(partition, topic) => (topic, partition)
       case _ => ("", "0") /* should never happen */
     }
 

@@ -132,7 +132,7 @@ final case class HttpRequest(val uri:     String,
     .find({ case (k, v) => k.toLowerCase == "content-type" })
     .map({ case (_, t) => t.toLowerCase })
     .map(c => parseContentType(c))
-    .getOrElse(AkkaContentTypes.NoContentType)
+    .getOrElse(defaultContentType)
 
   lazy val akkaHttpEntity = {
     if (body.isEmpty) AkkaHttpEntity.Empty

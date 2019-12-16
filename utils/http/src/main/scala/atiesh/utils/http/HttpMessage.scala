@@ -129,5 +129,10 @@ object HttpMessage extends Logging {
 
   // content type parser
   def parseContentType(contentType: String): AkkaContentType =
-    contentTypeMapper.getOrElse(contentType, defaultContentType)
+    contentTypeMapper.getOrElse(contentType, {
+      AkkaContentType.parse(contentType) match {
+        case Right(ct) => ct
+        case _ => defaultContentType
+      }
+    })
 }

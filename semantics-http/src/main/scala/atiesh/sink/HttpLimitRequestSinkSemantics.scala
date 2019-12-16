@@ -83,7 +83,6 @@ trait HttpLimitRequestSinkSemantics
           logger.debug("httpResponseHandler return HTTP_DONE buy " +
                        "max retry reached, discard request quietly")
       }
-      httpRequests.decrementAndGet()
       httpComplete()
     } else {
       httpRetry(req).onComplete(response => {
@@ -98,7 +97,6 @@ trait HttpLimitRequestSinkSemantics
                                               retries: Int): Unit =
     httpResponseHandler(events)(response) match {
       case HTTP_DONE =>
-        httpRequests.decrementAndGet()
         httpComplete()
       case HTTP_RETRY =>
         httpEnqueueRetryRequest(request, response, events, retries - 1)
