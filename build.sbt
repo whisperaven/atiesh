@@ -32,18 +32,21 @@ lazy val distribution = Project(
 /* atiesh core project */
 lazy val dependencies = Seq(
     // akka-actor
-    "com.typesafe.akka"          %% "akka-actor"          % "2.5.26",
+    "com.typesafe.akka"          %% "akka-actor"           % "2.5.26",
+    // typesafe config
+    "com.typesafe"               %  "config"               % "1.3.3",
     // kamon
-    "io.kamon"                   %% "kamon-core"          % "2.0.0"
-      exclude("org.slf4j", "slf4j-api") exclude("org.slf4j", "slf4j-log4j12")
-      exclude("com.typesafe", "config"),
-    "io.kamon"                   %% "kamon-system-metrics"% "2.0.0",
-    /* kamon reporter dependency for test only */
-    // "io.kamon"                   %% "kamon-prometheus"    % "2.0.0",
+    "io.kamon"                   %% "kamon-core"           % "2.0.4",
+    /* kamon utils dependency for test only */
+    "io.kamon"                   %% "kamon-system-metrics" % "2.0.1",
+    "io.kamon"                   %% "kamon-prometheus"     % "2.0.1",
     // logger
-    "ch.qos.logback"              % "logback-classic"     % "1.2.3", // scalalogging docs
-    "com.typesafe.scala-logging" %% "scala-logging"       % "3.9.0"
-)
+    "org.slf4j"                   % "slf4j-api"            % "1.7.29",
+    "ch.qos.logback"              % "logback-classic"      % "1.2.3", // scalalogging docs
+    "com.typesafe.scala-logging" %% "scala-logging"        % "3.9.0"
+).map(_.excludeAll(ExclusionRule("io.kamon", "kamon-core_2.11"),
+                   ExclusionRule("com.typesafe", "config"),
+                   ExclusionRule("org.slf4j", "slf4j-api")))
 
 /* atiesh core framework */
 lazy val core = (project in file("core"))
@@ -59,8 +62,7 @@ lazy val httputils = (project in file("utils/http"))
     common,
     name := "atiesh-utils-http",
     libraryDependencies ++= Seq(
-      "com.typesafe.akka" %% "akka-stream" % "2.5.26"
-        exclude("com.typesafe", "config"),
+      "com.typesafe.akka" %% "akka-stream" % "2.5.26",
       "com.typesafe.akka" %% "akka-http" % "10.1.10",
     )
   ).dependsOn(core)
@@ -72,9 +74,9 @@ lazy val kafka = (project in file("semantics-kafka"))
     name := "atiesh-semantics-kafka",
     libraryDependencies ++= Seq(
       "org.apache.kafka" %% "kafka" % "1.1.1"
-        exclude("org.slf4j", "slf4j-api") exclude("org.slf4j", "slf4j-log4j12")
+        exclude("org.slf4j", "slf4j-api")
         exclude("com.typesafe.scala-logging", "scala-logging_2.11")
-        exclude("com.typesafe.scala-logging", "scala-logging_2.12")
+        exclude("com.typesafe.scala-logging", "scala-logging_2.12"),
     )
   ).dependsOn(core)
 
@@ -84,9 +86,8 @@ lazy val http = (project in file("semantics-http"))
     common,
     name := "atiesh-semantics-http",
     libraryDependencies ++= Seq(
-      "com.typesafe.akka" %% "akka-stream" % "2.5.26"
-        exclude("com.typesafe", "config"),
-      "com.typesafe.akka" %% "akka-http" % "10.1.10",
+      "com.typesafe.akka" %% "akka-stream" % "2.5.26",
+      "com.typesafe.akka" %% "akka-http" % "10.1.10"
     )
   ).dependsOn(httputils)
 
