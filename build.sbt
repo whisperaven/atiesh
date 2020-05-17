@@ -10,7 +10,7 @@ lazy val common = Seq(
   /* master branch stable version => 2.2.1 (current)
    *   version := "2.2.1", */
   /* develop branch unstable test 2.3.x => stable release 2.4.x */
-  version := "2.3.0",
+  version := "2.3.1",
   scalaVersion := "2.11.12",
 
   /* BuildPaths.defaultGlobalBase => ~/.sbt */
