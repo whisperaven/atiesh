@@ -8,6 +8,9 @@ package atiesh.utils.http
 import akka.http.scaladsl.model.{ HttpProtocol => AkkaHttpProtocol,
                                   HttpProtocols => AkkaHttpProtocols }
 
+/**
+ * Standard http protocol type and constants.
+ */
 object HttpProtocols {
   type HttpProtocol = AkkaHttpProtocol
   val HTTP_PROTOCOL_10 = AkkaHttpProtocols.`HTTP/1.0`

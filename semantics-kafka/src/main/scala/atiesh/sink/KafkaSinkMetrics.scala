@@ -7,7 +7,7 @@ package atiesh.sink
 // java
 import java.util.function.{ Function => JFunc }
 import java.util.concurrent.{ ConcurrentHashMap => JCHashMap }
-// internal
+// internal 
 import atiesh.component.Component
 import atiesh.metrics.{ Metrics, ComponentMetrics }
 

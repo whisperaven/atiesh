@@ -57,20 +57,20 @@ trait KafkaSinkSemantics
   with Logging { this: Sink =>
   import KafkaSinkSemantics.{ KafkaSinkSemanticsOpts => Opts, _ }
 
-  @volatile final private var kafkaProducer: KafkaProducer[String, String] = _
+  final private[this] var kafkaProducer: KafkaProducer[String, String] = _
 
-  @volatile final private var kafkaDispatcher: String = _
-  @volatile final private var kafkaExecutionContext: ExecutionContext = _
+  final private[this] var kafkaDispatcher: String = _
+  final private[this] var kafkaExecutionContext: ExecutionContext = _
 
   final def getKafkaDispatcher: String = kafkaDispatcher
   final def getKafkaExecutionContext: ExecutionContext = kafkaExecutionContext
 
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
-
     kafkaDispatcher = getConfiguration.getString(Opts.OPT_AKKA_DISPATCHER,
                                                  Opts.DEF_AKKA_DISPATCHER)
     kafkaExecutionContext = system.dispatchers.lookup(kafkaDispatcher)
+
+    super.bootstrap()
   }
 
   final def createProduceCB(p: Promise[RecordMetadata]): Callback =

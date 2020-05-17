@@ -83,6 +83,11 @@ object Sink extends SinkType with Logging {
 trait SinkSemantics
   extends Logging { this: ExtendedComponent with SinkMetrics =>
   object SinkActor {
+    /*
+     * Inner class SinkActor class are different class in each
+     * Sink instances, we need create them inside each instance,
+     * otherwise you may got unstable identifier issues
+     */ 
     def props(): Props = Props(new SinkActor())
   }
   final private class SinkActor extends Actor with Logging {
@@ -201,11 +206,17 @@ trait Sink
   with SinkType
   with SinkMetrics
   with SinkSemantics {
-  @volatile final protected var sec: ExecutionContext = _
+  final protected[this] var sec: ExecutionContext = _
 
+  /*
+   * use the volatile mark variable <ref> inside SinkSemantics as 
+   * memory barrier, which insert a <MFENCE> that make all changes
+   * of the memory synced before the server invoke start, to achieve
+   * this we should invoke <super.bootstrap> after we setup everything
+   */
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
     sec = system.dispatchers.lookup(getDispatcher)
+    super.bootstrap()
   }
 
   def start(ready: Promise[Ready]): Future[Ready] = {

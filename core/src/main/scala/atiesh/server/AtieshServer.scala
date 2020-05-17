@@ -96,14 +96,14 @@ class AtieshServer(cfg: Configuration)
   with Logging {
   import AtieshServer._
 
-  private[this] val startingUp = new AtomicBoolean(true)
-  private[this] val shuttingDown = new AtomicBoolean(false)
-  private[this] val shutdownLatch = new CountDownLatch(1)
+  final private[this] val startingUp = new AtomicBoolean(true)
+  final private[this] val shuttingDown = new AtomicBoolean(false)
+  final private[this] val shutdownLatch = new CountDownLatch(1)
 
-  private[this] var extensions: List[Extension] = _
-  private[this] var sinks: List[Sink] = _
-  private[this] var interceptors: List[Interceptor] = _
-  private[this] var sources: List[Source] = _
+  final private[this] var extensions: List[Extension] = _
+  final private[this] var sinks: List[Sink] = _
+  final private[this] var interceptors: List[Interceptor] = _
+  final private[this] var sources: List[Source] = _
 
   final private[this] implicit val system =
     ActorSystem("guardian", cfg.unwrapped)
@@ -111,9 +111,9 @@ class AtieshServer(cfg: Configuration)
   final def getName = componentType
   final def getConfiguration = cfg
 
-  def awaitShutdown(): Unit = shutdownLatch.await()
+  final def awaitShutdown(): Unit = shutdownLatch.await()
 
-  def assemble() {
+  final def assemble(): Unit = {
     logger.info("assembling atiesh component")
 
     try {
@@ -130,6 +130,7 @@ class AtieshServer(cfg: Configuration)
         initializeComponents(cfg, Extension.componentType)(c => {
           Extension.initializeComponents(c)
         })
+      startComponents(extensions) /* start extensions asap */
 
       interceptors =
         initializeComponents(cfg, Interceptor.componentType)(c => {
@@ -147,7 +148,6 @@ class AtieshServer(cfg: Configuration)
 
       logger.info("starting atiesh component")
 
-      startComponents(extensions)
       startComponents(sinks)
       startComponents(sources)
     } catch {
@@ -163,16 +163,17 @@ class AtieshServer(cfg: Configuration)
     logger.info("atiesh server assembled")
   }
 
-  def disassemble(): Unit = {
+  final def disassemble(): Unit = {
     if (startingUp.get) {
-      throw new IllegalStateException("atiesh server is still starting up, " +
-                                      "cannot shut down (probably killed " +
-                                      "during startup)")
+      throw new IllegalStateException(
+        "atiesh server is still starting up, cannot shut down (probably " +
+        "killed during startup), use <kill -9> if that is what you want," +
+        "or waiting for the server initialized")
     }
 
     if (shutdownLatch.getCount > 0 &&
         shuttingDown.compareAndSet(false, true)) {
-      logger.info("shutting down atiesh server")
+      logger.info("shutting down atiesh server, stop all components")
 
       stopComponents(sources)
       stopComponents(sinks)

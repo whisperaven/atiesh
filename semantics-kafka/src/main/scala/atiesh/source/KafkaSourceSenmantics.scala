@@ -93,27 +93,27 @@ trait KafkaSourceSemantics
   with Logging { this: Source =>
   import KafkaSourceSemantics.{ KafkaSourceSemanticsOpts => Opts, _ }
 
-  @volatile final private var kafkaConsumer: KafkaConsumer[String, String] = _
-  @volatile final private var kafkaPollTimeout: FiniteDuration = _
+  final private[this] var kafkaConsumer: KafkaConsumer[String, String] = _
+  final private[this] var kafkaPollTimeout: FiniteDuration = _
 
-  @volatile final private var kafkaDispatcher: String = _
-  @volatile final private var kafkaExecutionContext: ExecutionContext = _
+  final private[this] var kafkaDispatcher: String = _
+  final private[this] var kafkaExecutionContext: ExecutionContext = _
 
-  final private val kafkaPollsCount: AtomicLong = new AtomicLong(0)
-  @volatile final private var kafkaCommitIntervalPolls: Long = 0
+  final private[this] val kafkaPollsCount: AtomicLong = new AtomicLong(0)
+  final private[this] var kafkaCommitIntervalPolls: Long = 0
 
   type CommitSlot = Option[Future[Map[TopicPartition, OffsetAndMetadata]]]
-  @volatile final private var commitSlot: CommitSlot = None
+  @volatile final private[this] var commitSlot: CommitSlot = None
 
   final def getKafkaDispatcher: String = kafkaDispatcher
   final def getKafkaExecutionContext: ExecutionContext = kafkaExecutionContext
 
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
-
     kafkaDispatcher = getConfiguration.getString(Opts.OPT_AKKA_DISPATCHER,
                                                  Opts.DEF_AKKA_DISPATCHER)
     kafkaExecutionContext = system.dispatchers.lookup(kafkaDispatcher)
+
+    super.bootstrap()
   }
 
   import KafkaSourceSemanticsHeadersName._
@@ -183,7 +183,7 @@ trait KafkaSourceSemantics
       commitSlot = Some(p.future)
     }
 
-  final def createConsumer(
+  final private def createConsumer(
     ccf: Option[Configuration],
     topics: List[String]): KafkaConsumer[String, String] = {
     val props = new Properties()

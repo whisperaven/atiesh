@@ -19,17 +19,29 @@ import akka.http.scaladsl.model.{ Uri => AkkaUri,
 // internal
 import atiesh.utils.Logging
 
+/**
+ * Standard http message helpers and constants.
+ */
 object HttpMessage extends Logging {
   object implicits {
     implicit def asStringBody(body: Array[Byte]): String = toStringBody(body)
   }
 
+  /**
+   * name and class representation of standard charset of UTF8.
+   */
   val charset: Charset = StandardCharsets.UTF_8
   val charsetName: String = StandardCharsets.UTF_8.name()
 
+  /**
+   * default class representation of http protocol and content type.
+   */
   val defaultProtocol = HttpProtocols.HTTP_PROTOCOL_10
   val defaultContentType = AkkaContentTypes.NoContentType
 
+  /**
+   * mapper of string to akka ContentType class and vice versa.
+   */
   val contentTypeMapper = Map[String, AkkaContentType](
     "application/json"         -> AkkaContentTypes.`application/json`,
     "application/grpc+proto"   -> AkkaContentTypes.`application/grpc+proto`,
@@ -42,10 +54,16 @@ object HttpMessage extends Logging {
   val akkaContentTypeMapper: Map[AkkaContentType, String] =
     contentTypeMapper.map(_.swap)
 
+  /**
+   * default http empty body, empty query and empty header.
+   */
   val emptyBody   = Array[Byte]()
   val emptyQuery  = List[(String, String)]()
   val emptyHeader = Map[String, String]()
 
+  /**
+   * helpers for convert http body from Array[Byte] to String.
+   */
   def toStringBody(bodyBytes: Array[Byte]): String =
     new String(bodyBytes, charset)
   def toStringBody(bodyBytes: Array[Byte], charset: Charset): String =
@@ -53,7 +71,9 @@ object HttpMessage extends Logging {
   def toStringBody(bodyBytes: Array[Byte], charset: String): String =
     new String(bodyBytes, charset)
 
-  // status code parser
+  /**
+   * parser for map Int representation of http code to akka StatusCode class.
+   */
   def parseStatus(status: Int): AkkaStatusCode = {
     try { AkkaStatusCode.int2StatusCode(status) }
     catch {
@@ -63,12 +83,18 @@ object HttpMessage extends Logging {
     }
   }
 
-  // uri parser
+  /**
+   * parser for map string uri and queries to akka Uri class.
+   */
   def parseUri(queries: Seq[(String, String)], uri: String): AkkaUri = {
     if (queries.isEmpty) AkkaUri(uri)
     else AkkaUri(uri).withQuery(AkkaUri.Query(queries: _*))
   }
 
+  /**
+   * parser for extract the string representation of http uri and
+   * http queries from akka Uri class.
+   */
   def parseUri(u: AkkaUri): (List[(String, String)], String) = {
     val seqQs = u.queryString(charset)
                   .map(_.split("&"))
@@ -84,7 +110,9 @@ object HttpMessage extends Logging {
     (seqQs, uri)
   }
 
-  // header parser
+  /**
+   * parser for map string pair http headers to akka HttpHeader classes.
+   */
   import AkkaHttpHeader.ParsingResult._
   def parseHeaders(
     headers: Map[String, String]): immutable.Seq[AkkaHttpHeader] =
@@ -112,6 +140,9 @@ object HttpMessage extends Logging {
         } else hs
     })
 
+  /**
+   * parser for map akka HttpHeader class to string pair http headers.
+   */
   def parseHeaders(headers: Seq[AkkaHttpHeader]): Map[String, String] =
     headers.foldLeft(Map[String, String]())((hs, header) => {
       header match {
@@ -119,6 +150,9 @@ object HttpMessage extends Logging {
       }
     })
 
+  /**
+   * parser for extract string pair http headers from akka HttpResponse class.
+   */
   def parseHeaders(response: AkkaHttpResponse): Map[String, String] =
     response.headers.foldLeft(
       akkaContentTypeMapper.get(response.entity.contentType)
@@ -127,7 +161,9 @@ object HttpMessage extends Logging {
       (hs, h) => { hs + (h.name -> h.value) }
     )
 
-  // content type parser
+  /**
+   * parser for map string content-type to akka ContentTypee class.
+   */
   def parseContentType(contentType: String): AkkaContentType =
     contentTypeMapper.getOrElse(contentType, {
       AkkaContentType.parse(contentType) match {

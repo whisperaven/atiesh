@@ -92,10 +92,10 @@ trait AliyunSLSSinkSemantics
   with Logging { this: Sink =>
   import AliyunSLSSinkSemantics.{ AliyunSLSSinkSemanticsOpts => Opts, _ }
 
-  @volatile final private var aliyunSLSProducer: LogProducer = _
+  final private[this] var aliyunSLSProducer: LogProducer = _
 
-  @volatile final private var aliyunSLSDispatcher: String = _
-  @volatile final private var aliyunSLSExecutionContext: ExecutionContext = _
+  final private[this] var aliyunSLSDispatcher: String = _
+  final private[this] var aliyunSLSExecutionContext: ExecutionContext = _
 
   final def getAliyunSLSDispatcher: String =
     aliyunSLSDispatcher
@@ -103,11 +103,11 @@ trait AliyunSLSSinkSemantics
     aliyunSLSExecutionContext
 
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
-
     aliyunSLSDispatcher = getConfiguration.getString(Opts.OPT_AKKA_DISPATCHER,
                                                      Opts.DEF_AKKA_DISPATCHER)
     aliyunSLSExecutionContext = system.dispatchers.lookup(aliyunSLSDispatcher)
+
+    super.bootstrap()
   }
 
   final def slsCreateProduceCB(p: Promise[Result], length: Int): Callback =

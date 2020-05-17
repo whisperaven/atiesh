@@ -44,7 +44,7 @@ object CachedProxy {
                                         formatter: Array[Byte] => T)
 
 
-  @volatile var proxyInstance: Option[CachedProxy] = None
+  var proxyInstance: Option[CachedProxy] = None
   def getProxyInstance: CachedProxy = proxyInstance match {
     case Some(instance) =>
       instance
@@ -57,7 +57,7 @@ object CachedProxy {
 }
 
 /**
- * Atiesh http cached proxy,
+ * Atiesh http cached proxy class,
  * an util for access and cache external http resource.
  */
 class CachedProxy(name: String, dispatcher: String, hcpcf: Configuration)
@@ -65,22 +65,20 @@ class CachedProxy(name: String, dispatcher: String, hcpcf: Configuration)
   with Logging {
   import CachedProxy.{ CachedProxyOpts => Opts, _ }
 
-  @volatile final private implicit var ec: ExecutionContext = _
-  @volatile final private implicit var materializer: Materializer = _
+  final private[this] implicit var ec: ExecutionContext = _
+  final private[this] implicit var materializer: Materializer = _
 
-  @volatile final private var http: HttpExt = _
-  @volatile final private var scheduler: Scheduler = _
+  final private[this] var http: HttpExt = _
+  final private[this] var scheduler: Scheduler = _
 
-  @volatile final private var cache: JCHashMap[String, AnyRef] = _
-  @volatile final private var tasks: JCHashMap[String, CacheUpdateTask] = _
-  @volatile final private var slots: JCHashMap[String, Promise[AnyRef]] = _
+  final private[this] var cache: JCHashMap[String, AnyRef] = _
+  final private[this] var tasks: JCHashMap[String, CacheUpdateTask] = _
+  final private[this] var slots: JCHashMap[String, Promise[AnyRef]] = _
 
-  @volatile final var maxResponseBodySize: Long = _
-  @volatile final var zeroInitialDelay: Boolean = _
+  final private[this] var maxResponseBodySize: Long = _
+  final private[this] var zeroInitialDelay: Boolean = _
 
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
-
     val cfg = getConfiguration
     val cacheSize = cfg.getInt(Opts.OPT_CACHE_SIZE, Opts.DEF_CACHE_SIZE)
     zeroInitialDelay = cfg.getBoolean(Opts.OPT_ZERO_INITIAL_DELAY,
@@ -98,6 +96,8 @@ class CachedProxy(name: String, dispatcher: String, hcpcf: Configuration)
     slots = new JCHashMap[String, Promise[AnyRef]](cacheSize)
 
     proxyInstance = Some(this)
+
+    super.bootstrap()
   }
 
   val responseErrorHandler: PartialFunction[Throwable, ByteString] = {
@@ -107,6 +107,10 @@ class CachedProxy(name: String, dispatcher: String, hcpcf: Configuration)
         s"(${maxResponseBodySize} bytes), you can configure this " +
         s"by setting <${Opts.OPT_MAX_RESPONSE_BODY_SIZE}> in " +
         s"<${componentType}> section")
+    case exc: Throwable =>
+      throw new UnexceptedHttpResponseException(
+        s"got exception during response reading, which caused by an " +
+        s"unexcepted http error response from low-level api", exc)
   }
 
   def createScheduleTaskFor[T](

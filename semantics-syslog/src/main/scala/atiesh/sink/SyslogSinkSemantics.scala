@@ -42,7 +42,7 @@ object SyslogSinkSemantics {
 trait SyslogSinkSemantics extends SinkSemantics with Logging { this: Sink =>
   import SyslogSinkSemantics.{ SyslogSinkSemanticsOpts => Opts, _ }
 
-  private var syslogMessageSender: AbstractSyslogMessageSender = _
+  final private[this] var syslogMessageSender: AbstractSyslogMessageSender = _
 
   override def open(ready: Promise[Ready]): Unit = {
     val cfg = getConfiguration

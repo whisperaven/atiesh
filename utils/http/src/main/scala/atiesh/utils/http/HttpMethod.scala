@@ -8,6 +8,9 @@ package atiesh.utils.http
 import akka.http.scaladsl.model.{ HttpMethod => AkkaHttpMethod,
                                   HttpMethods => AkkaHttpMethods }
 
+/**
+ * Standard http method type and constants.
+ */
 object HttpMethods {
   type HttpMethod = AkkaHttpMethod
   val GET         = AkkaHttpMethods.GET

@@ -4,6 +4,14 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.4.0] - Not Releases (develop @ 2.3.x)
+- add new semantics for http source and filesystem source
+- add new components for http source/sink and filesystem source
+- redesign components and server initialize
+- redesign semantics for http sink
+- redesign utils for http request/response
+- bug fix for concurrent issues
+
 ## [2.1.0] - 2019-04-10
 - add commit to trait Sink
 - add start & stop to trait Sink\* and trait Source\*

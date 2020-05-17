@@ -4,7 +4,7 @@
 
 package atiesh.source
 
-// scala
+// internal
 import atiesh.interceptor.Interceptor
 import atiesh.sink.Sink
 import atiesh.utils.{ Configuration, Logging }

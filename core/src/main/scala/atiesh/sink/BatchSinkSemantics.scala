@@ -77,6 +77,11 @@ trait BatchSinkSemantics
   with Logging { this: Sink =>
   import BatchSinkSemantics.{ BatchSinkSemanticsOpts => Opts, _ }
   object BatchManagerActor {
+    /*
+     * Inner class BantchManagerActor class are different class in each
+     * Sink instances, we need create them inside each instance,
+     * otherwise you may got unstable identifier issues
+     */ 
     def props(): Props = Props(new BatchManagerActor())
   }
   final private class BatchManagerActor extends Actor with Logging {
@@ -97,23 +102,23 @@ trait BatchSinkSemantics
     }
   }
 
-  @volatile final private[sink] var batchManager: ActorRef = _
+  final private[this] var batchManager: ActorRef = _
   final def batchManagerRef: ActorRef = batchManager
   final def batchManagerName: String = s"actor.sink.${getName}.batchManager"
 
-  @volatile final var batchSize: Int = _
-  @volatile final var batchTimeout: FiniteDuration = _
-  @volatile final var batchDispatcher: String = _
+  final private[this] val buffers =
+    new JCHashMap[String, FlushableBatchBuffer]()
+  final private[this] var batchSize: Int = _
+  final private[this] var batchTimeout: FiniteDuration = _
+  final private[this] var batchDispatcher: String = _
 
-  @volatile final private var batchScheduler: Scheduler = _
-  @volatile final private var batchExecutionContext: ExecutionContext = _
+  final private[this] var batchScheduler: Scheduler = _
+  final private[this] var batchExecutionContext: ExecutionContext = _
 
   final def getBatchDispatcher: String = batchDispatcher
   final def getBatchExecutionContext: ExecutionContext = batchExecutionContext
 
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
-
     val cfg = getConfiguration
     batchSize = cfg.getInt(Opts.OPT_BATCH_SIZE, Opts.DEF_BATCH_SIZE)
     batchTimeout = cfg.getDuration(Opts.OPT_BATCH_TIMEOUT,
@@ -133,17 +138,17 @@ trait BatchSinkSemantics
         s"meaningless you may want change the setting of " +
         s"${Opts.OPT_BATCH_SIZE} greater than 1")
     }
+    batchScheduler = system.scheduler
+    batchExecutionContext = system.dispatchers.lookup(batchDispatcher)
+
     batchManager = system.actorOf(
       BatchManagerActor.props().withDispatcher(batchDispatcher),
       batchManagerName)
-    batchScheduler = system.scheduler
-    batchExecutionContext = system.dispatchers.lookup(batchDispatcher)
+
+    super.bootstrap()
   }
 
-  final private[sink] val buffers =
-    new JCHashMap[String, FlushableBatchBuffer]()
-
-  final private[sink] def batchAggregate(event: Event,
+  final private[this] def batchAggregate(event: Event,
                                          tag: String): FlushableBatchBuffer =
     buffers.compute(tag, new JBiFunc[String, FlushableBatchBuffer,
                                              FlushableBatchBuffer] {
@@ -168,7 +173,7 @@ trait BatchSinkSemantics
       }
     })
 
-  final private[sink] def batchFlush(tag: String, timeout: Boolean): Unit = {
+  final private[this] def batchFlush(tag: String, timeout: Boolean): Unit = {
     val fb = buffers.remove(tag)
     if (fb == null) { /* batch already flushed */
       if (timeout) {
@@ -192,7 +197,7 @@ trait BatchSinkSemantics
     }
   }
 
-  final private[sink] def batchFlush(closed: Promise[Closed]): Unit = {
+  final private[this] def batchFlush(closed: Promise[Closed]): Unit = {
     if (buffers.isEmpty()) {
       closed.success(Closed(getName))
     } else {

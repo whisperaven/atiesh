@@ -21,12 +21,13 @@ lazy val common = Seq(
  * default builds:
  *  => core
  *  => httputils => http
+ *  => filesystem
  *  => kafka
  */
 lazy val distribution = Project(
   id = "atiesh-distribution",
   base = file(".")
-).aggregate(core, httputils, kafka, http)
+).aggregate(core, httputils, filesystem, kafka, http)
  .settings(common)
 
 /* atiesh core project */
@@ -65,6 +66,14 @@ lazy val httputils = (project in file("utils/http"))
       "com.typesafe.akka" %% "akka-stream" % "2.5.26",
       "com.typesafe.akka" %% "akka-http" % "10.1.10",
     )
+  ).dependsOn(core)
+
+/* atiesh semantics - files */
+lazy val filesystem = (project in file("semantics-filesystem"))
+  .settings(
+    common,
+    name := "atiesh-semantics-filesystem",
+    libraryDependencies ++= dependencies
   ).dependsOn(core)
 
 /* atiesh semantics - kafka */

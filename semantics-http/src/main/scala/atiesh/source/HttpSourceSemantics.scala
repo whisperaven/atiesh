@@ -45,37 +45,32 @@ object HttpSourceSemantics {
 
 trait HttpSourceSemantics
   extends SourceSemantics
-  with PassiveSourceSemantics
   with Logging { this: Source =>
   import HttpSourceSemantics.{ HttpSourceSemanticsOpts => Opts,
                                HttpSourceSemanticsSignals => Sig }
   import HttpRequest._
 
-  @volatile final private var httpContext: HttpExt = _
-  @volatile final private var httpDispatcher: String = _
-  @volatile final private var httpExecutionContext: ExecutionContext = _
-  @volatile final private var httpMaterializer: Materializer = _
+  final private[this] var httpDispatcher: String = _
+  final private[this] var httpExecutionContext: ExecutionContext = _
+  final private[this] var httpMaterializer: Materializer = _
+  final private[this] var httpContext: HttpExt = _
 
-  @volatile
   final private[this] var httpBindingContext: (String, String, Int) = _
-  @volatile final var shutdownTimeout: FiniteDuration = _
+  final private[this] var shutdownTimeout: FiniteDuration = _
 
   type HttpConnListener = AkkaSource[Http.IncomingConnection,
                                      Future[Http.ServerBinding]]
-  @volatile final private[this] var httpConnListener: HttpConnListener = _
+  final private[this] var httpConnListener: HttpConnListener = _
   type HttpConnProcessor = RunnableGraph[Future[Http.ServerBinding]]
-  @volatile final private[this] var httpConnProcessor: HttpConnProcessor = _
-  // type HttpServer = Future[Http.ServerBinding]
+  final private[this] var httpConnProcessor: HttpConnProcessor = _
   type HttpServer = Http.ServerBinding
-  @volatile final private[this] var httpServer: HttpServer = _
+  final private[this] var httpServer: HttpServer = _
 
-  def getHttpDispatcher: String = httpDispatcher
-  def getHttpExecutionContext: ExecutionContext = httpExecutionContext
-  def getHttpMaterializer: Materializer = httpMaterializer
+  final def getHttpDispatcher: String = httpDispatcher
+  final def getHttpExecutionContext: ExecutionContext = httpExecutionContext
+  final def getHttpMaterializer: Materializer = httpMaterializer
 
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
-
     val cfg = getConfiguration
 
     val bindURL = cfg.getString(Opts.OPT_LISTEN_URL, Opts.DEF_LISTEN_URL)
@@ -96,7 +91,7 @@ trait HttpSourceSemantics
           } else u.getHost
       }
       val proto = u.getProtocol
-      val port  = {
+      val port  = {   /* TODO: at this point, https may not work properly */
         if (u.getPort == -1) if (proto == "https") 443 else 80
         else u.getPort
       }
@@ -111,14 +106,15 @@ trait HttpSourceSemantics
     httpDispatcher = cfg.getString(Opts.OPT_AKKA_DISPATCHER,
                                    Opts.DEF_AKKA_DISPATCHER)
     httpExecutionContext = system.dispatchers.lookup(httpDispatcher)
-
-    httpContext = Http()
     httpMaterializer = ActorMaterializer()
+    httpContext = Http()
 
     val (bindProto, bindHost, bindPort) = httpBindingContext
     httpConnProcessor =
       httpConstructServerProcessor(
         bindProto, bindHost, bindPort)(httpMaterializer)
+
+    super.bootstrap()
   }
 
   override def open(ready: Promise[Ready]): Unit = {
@@ -132,7 +128,7 @@ trait HttpSourceSemantics
         case Failure(exc) =>
           throw new SourceInitializeException(
             s"source <${getName}> got fatal error during http " +
-            s"server binding", exc)
+            s"server binding, abort initialize", exc)
       }
     super.open(ready)
   }
@@ -175,7 +171,7 @@ trait HttpSourceSemantics
     }
   }
 
-  final private def httpConstructServerProcessor(
+  final private[this] def httpConstructServerProcessor(
     bindProto: String, bindHost: String, bindPort: Int)(
     implicit fm: Materializer): HttpConnProcessor = {
     httpConnListener = {
@@ -185,8 +181,8 @@ trait HttpSourceSemantics
         throw new SourceInitializeException(
           s"source <${getName}> got error during initializing http " +
           s"semantics, non http protocols current not supported, these " +
-          s"protocols (e.g.: https, http2) should use layer 7 proxy " +
-          s"& balancer handle them")
+          s"protocols (e.g.: https, http2) should handled by layer 7 " +
+          s"proxy & balancer servers")
       }
     }
     httpConnListener
@@ -226,7 +222,7 @@ trait HttpSourceSemantics
           })(httpExecutionContext)
           .map(req => httpRequestFilter(req))(httpExecutionContext)
           .flatMap(req => httpRequestHandler(req))(httpExecutionContext)
-          .recoverWith(httpRequestErrorHandler)(httpExecutionContext)
+          .recover(httpRequestErrorHandler)(httpExecutionContext)
           .onComplete({
             case Success(response) =>
               p.success(response.akkaHttpResponse)
@@ -241,7 +237,7 @@ trait HttpSourceSemantics
     Try { httpRequestExtractEvents(req) } match {
       case Success(events) =>
         scheduleNextCycle(events)
-          .flatMap(_ => {
+          .map(_ => {
             httpRequestRespond(req, events)
           })(httpExecutionContext)
       case Failure(exc) =>
@@ -251,30 +247,42 @@ trait HttpSourceSemantics
   /**
    * Not thread safe method, user defined filter method for filter each
    * incoming request, discard request when throw exception.
+   *
+   * Any exception thrown here, will be caught by httpRequestErrorHandler
+   * later for decide the proper response to send to the client.
    */
   def httpRequestFilter(req: HttpRequest): HttpRequest
 
   /**
-   * Not thread safe method, user defined extract method for extract event(s)
-   * from each incoming request to the atiesh event engine.
+   * Not thread safe method, user defined event(s) extract method for
+   * extract event(s) from each incoming request to the atiesh event engine.
    *
-   * Any exception threw here, will be caught by httpRequestErrorHandler.
+   * Any exception thrown here, will be caught by httpRequestErrorHandler
+   * later for decide the proper response to send to the client.
    */
   def httpRequestExtractEvents(req: HttpRequest): List[Event]
 
   /**
    * Not thread safe method, user defined respond method for send response
-   * to the client from each incoming request.
+   * to the client for each incoming request.
+   *
+   * Any exception thrown here, will be caught by httpRequestErrorHandler
+   * later for decide the proper response to send to the client.
    */
   def httpRequestRespond(req: HttpRequest,
-                         events: List[Event]): Future[HttpResponse]
+                         events: List[Event]): HttpResponse
 
   /**
    * Not thread safe method, user defined request level error handler, no
-   * matter what happened, if there is an exception during request => response,
-   * this handler called.
+   * matter what happened, if there is an exception during request => response
+   * process, this handler called.
+   *
+   * see also:
+   *  - httpRequestFilter
+   *  - httpRequestExtractEvents
+   *  - httpRequestRespond
    */
-  def httpRequestErrorHandler: PartialFunction[Throwable, Future[HttpResponse]]
+  def httpRequestErrorHandler: PartialFunction[Throwable, HttpResponse]
 
   /**
    * Not thread safe method, user defined connection level error handler, no

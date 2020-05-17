@@ -154,6 +154,11 @@ object Source extends SourceType with Logging {
 trait SourceSemantics
   extends Logging { this: ExtendedComponent with SourceMetrics =>
   object SourceActor {
+    /*
+     * Inner class SourceActor class are different class in each
+     * Source instances, we need create them inside each instance,
+     * otherwise you may got unstable identifier issues
+     */ 
     def props(): Props = Props(new SourceActor())
   }
   final private class SourceActor extends Actor with Logging {
@@ -161,6 +166,7 @@ trait SourceSemantics
       case Offer(events, confirm) =>
         if (!shuttingDown.get()) {
           sourceCycle(events)
+          commit()
 
           try {
             doneCycle()
@@ -171,7 +177,6 @@ trait SourceSemantics
                            s"means you may use a source component with " +
                            s"wrong implementation", exc)
           }
-          commit()
           confirm.success(Confirmation(getName))
 
           metricsSourceCycleRunCounter.increment()
@@ -183,6 +188,7 @@ trait SourceSemantics
         if (!shuttingDown.get()) {
           try {
             sourceCycle(mainCycle())
+            commit()
             doneCycle()
           } catch {
             case exc: Throwable =>
@@ -191,7 +197,6 @@ trait SourceSemantics
                            s"which means you may use a source component " +
                            s"with wrong implementation", exc)
           }
-          commit()
           scheduleNextCycle()
 
           metricsSourceCycleRunCounter.increment()
@@ -237,14 +242,14 @@ trait SourceSemantics
   final def isShuttingDown: Boolean = shuttingDown.get
 
   def bootstrap()(implicit system: ActorSystem): Unit = {
-    ref = system.actorOf(SourceActor.props().withDispatcher(getDispatcher),
-                         actorName)
     if ((isActive && isPassive) || (!isActive && !isPassive)) {
       throw new IllegalStateException(
         s"source <${getName}> can not be both active and passive or " +
         s"either active nor passive, you may use a source component " +
         s"with wrong implementation")
     }
+    ref = system.actorOf(SourceActor.props().withDispatcher(getDispatcher),
+                         actorName)
   }
 
   def open(ready: Promise[Ready]): Unit = {
@@ -451,8 +456,8 @@ trait PassiveSourceSemantics { this: SourceSemantics =>
   final def isPassive: Boolean = true
 
   /**
-   * Passive source doesn't invoke this method,
-   * provide this default one fulfill the source semantics api.
+   * Passive source doesn't invoke this method, provide
+   * this default one fulfill the source semantics api.
    */
   final def mainCycle(): List[Event] = List[Event]()
 }
@@ -465,11 +470,17 @@ trait Source
   with SourceType
   with SourceMetrics
   with SourceSemantics {
-  @volatile final protected var sec: ExecutionContext = _
+  final protected[this] var sec: ExecutionContext = _
 
+  /*
+   * use the volatile mark variable <ref> inside SourceSemantics as 
+   * memory barrier, which insert a <MFENCE> that make all changes
+   * of the memory synced before the server invoke start, to achieve
+   * this we should invoke <super.bootstrap> after we setup everything
+   */
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
     sec = system.dispatchers.lookup(getDispatcher)
+    super.bootstrap()
   }
 
   def start(ready: Promise[Ready]): Future[Ready] = {

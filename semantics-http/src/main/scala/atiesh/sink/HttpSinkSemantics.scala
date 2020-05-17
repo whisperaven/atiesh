@@ -47,28 +47,26 @@ trait HttpSinkSemantics
   import HttpSinkSemantics.{ HttpSinkSemanticsOpts => Opts,
                              HttpSinkSemanticsSignals => Sig }
 
-  @volatile final private var httpDispatcher: String = _
-  @volatile final private var httpExecutionContext: ExecutionContext = _
-  @volatile final private var httpMaterializer: Materializer = _
+  final private[this] var httpDispatcher: String = _
+  final private[this] var httpExecutionContext: ExecutionContext = _
+  final private[this] var httpMaterializer: Materializer = _
 
   type HttpReqQueue =
     SourceQueueWithComplete[(AkkaHttpRequest, Promise[AkkaHttpResponse])]
-  @volatile final private[this] var httpRequestQueue: HttpReqQueue = _
+  final private[this] var httpRequestQueue: HttpReqQueue = _
 
   type HttpProcessorFlow =
     Flow[(AkkaHttpRequest, Promise[AkkaHttpResponse]),
          (Try[AkkaHttpResponse], Promise[AkkaHttpResponse]),
          Http.HostConnectionPool]
-  @volatile final private[this] var httpProcessorFlow: HttpProcessorFlow = _
-  @volatile final private[this] var httpConnectionPool: HostConnectionPool = _
+  final private[this] var httpProcessorFlow: HttpProcessorFlow = _
+  final private[this] var httpConnectionPool: HostConnectionPool = _
 
-  def getHttpDispatcher: String = httpDispatcher
-  def getHttpExecutionContext: ExecutionContext = httpExecutionContext
-  def getHttpMaterializer: Materializer = httpMaterializer
+  final def getHttpDispatcher: String = httpDispatcher
+  final def getHttpExecutionContext: ExecutionContext = httpExecutionContext
+  final def getHttpMaterializer: Materializer = httpMaterializer
 
   override def bootstrap()(implicit system: ActorSystem): Unit = {
-    super.bootstrap()
-
     val cfg = getConfiguration
 
     val remoteURL   = new URL(cfg.getString(Opts.OPT_REMOTE_URL))
@@ -84,14 +82,14 @@ trait HttpSinkSemantics
                                    Opts.DEF_AKKA_DISPATCHER)
     httpExecutionContext = system.dispatchers.lookup(httpDispatcher)
 
-    implicit val materializer = ActorMaterializer()
+    httpMaterializer = ActorMaterializer()
     httpProcessorFlow = {
       if (remoteProto == "https") {
         Http().newHostConnectionPoolHttps[Promise[AkkaHttpResponse]](
-          remoteHost, remotePort)
+          remoteHost, remotePort)(httpMaterializer)
       } else {
         Http().newHostConnectionPool[Promise[AkkaHttpResponse]](
-          remoteHost, remotePort)
+          remoteHost, remotePort)(httpMaterializer)
       }
     }
     val (queue, pool) =
@@ -107,11 +105,11 @@ trait HttpSinkSemantics
             p.failure(exc)
         }))
         /* start the stream & get MaterializedValue */
-        .run()
-
-    httpMaterializer = materializer
+        .run()(httpMaterializer)
     httpRequestQueue = queue
     httpConnectionPool = pool
+
+    super.bootstrap()
   }
 
   override def process(sig: Int): Unit = {
@@ -129,7 +127,7 @@ trait HttpSinkSemantics
                        "which means you may use a http sink with " +
                        "wrong implementation", getName)
         } else {
-          try { /* just in case the queue return null  */
+          try { /* just in case the queue return null which should not */
             val (r, p) = httpRetryQueue.poll()
             httpRequest(r).onComplete({
               case Success(response) => p.success(response)

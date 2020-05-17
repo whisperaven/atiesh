@@ -80,8 +80,13 @@ trait Extension
   extends ExtendedComponent
   with ExtensionType
   with ComponentMetrics {
-  @volatile final protected var sec: ExecutionContext = _
+  @volatile final protected[this] var sec: ExecutionContext = _
 
+  /*
+   * we use the volatile mark variable <sec> as memory barrier, which
+   * insert a <MFENCE> that make all changes of the memory synced
+   * before the server invoke start
+   */
   def bootstrap()(implicit system: ActorSystem): Unit = {
     sec = system.dispatchers.lookup(getDispatcher)
   }

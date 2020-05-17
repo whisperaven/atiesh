@@ -11,13 +11,12 @@ import kamon.metric.{ Counter => MCounter, Gauge => MGauge,
                       Histogram => MHistogram, Timer => MTimer,
                       RangeSampler => MRangeSampler, _ }
 // scala
-import scala.util.{ Try, Success, Failure }
+import scala.util.{ Success, Failure }
 import scala.concurrent.Await
 import scala.concurrent.duration._
 // internal
 import atiesh.component.Component
-import atiesh.utils.{ Logging, Configuration,
-                      ComponentLoader, ConfigParseException }
+import atiesh.utils.{ Logging, Configuration, ConfigParseException }
 
 trait MetricsType {
   final val componentType: String = "kamon"
@@ -27,7 +26,7 @@ object Metrics extends Component with MetricsType with Logging {
   final def getName = componentType
   final def getConfiguration = metricsConfiguration
 
-  final var metricsConfiguration: Configuration = _
+  final private[this] var metricsConfiguration: Configuration = _
   final def initializeMetrics(cfg: Configuration): Unit = {
     metricsConfiguration = cfg.getSection(componentType) match {
       case Some(c) => c

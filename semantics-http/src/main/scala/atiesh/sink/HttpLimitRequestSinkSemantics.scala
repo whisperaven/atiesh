@@ -38,7 +38,7 @@ trait HttpLimitRequestSinkSemantics
   import HttpOperationStates._
 
   final private[this] val httpRequests: AtomicLong = new AtomicLong(0)
-  @volatile final private[this] var httpRequestLimits: Long = 0
+  final private[this] var httpRequestLimits: Long = 0 /* write once @ start */
 
   /**
    * High-Level API - HttpEnqueueRequest
@@ -126,7 +126,7 @@ trait HttpLimitRequestSinkSemantics
           logger.debug("sink <{}> acknowledge delayed commit " +
                        "transaction(s), current <{}> open requests",
                        getName, requests)
-          super.ack(tran)
+          ack(tran)
         })
       transactions.clear()
     }

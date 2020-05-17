@@ -8,7 +8,7 @@ package atiesh.sink
 import java.util.UUID.randomUUID
 // scala
 import scala.util.{ Success, Failure }
-// internal
+// internal 
 import atiesh.interceptor.Interceptor
 import atiesh.event.Event
 import atiesh.utils.{ Configuration, Logging }
