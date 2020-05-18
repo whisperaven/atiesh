@@ -13,6 +13,19 @@ lazy val common = Seq(
   version := "2.3.1",
   scalaVersion := "2.11.12",
 
+  // These settings are hao.feng@baishancloud.com Private Developer CI
+  resolvers ++= Seq(
+    ("White Peak Maven Central"  at "http://nexus.infra.white-peak.io/repository/wpio-maven-central").withAllowInsecureProtocol(true),
+    ("White Peak Maven Releases" at "http://nexus.infra.white-peak.io/repository/wpio-maven-releases").withAllowInsecureProtocol(true)
+  ),
+  publishTo := {
+    val nexus = "http://nexus.infra.white-peak.io/repository"
+    if (isSnapshot.value)
+      Some(("snapshots" at nexus + "/wpio-maven-snapshots").withAllowInsecureProtocol(true))
+    else
+      Some(("releases"  at nexus + "/wpio-maven-releases").withAllowInsecureProtocol(true))
+  },
+
   /* BuildPaths.defaultGlobalBase => ~/.sbt */
   credentials += Credentials(BuildPaths.defaultGlobalBase / ".credentials")
 )

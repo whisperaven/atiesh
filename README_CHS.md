@@ -14,11 +14,11 @@
 
 而在它们之中传递的消息则被包装成事件 (Event) 当前默认等事件类为 *atiesh.event.SimpleEvent*
 
-最后一种组件为支持组件 (e.g.: *atiesh.utils.http.CachedProxy*) 基于 *atiesh.utils.AtieshComponent* 开发
+类行为 *Extension* 的组件为支持组件 (e.g.: *atiesh.utils.http.CachedProxy*) 基于 *atiesh.utils.AtieshExtension* 开发
 
 ## 数据流的生命周期和单位
 
-数据 (或者说消息) 的最小单位是 *event* , 它们被 *source* 从外部服务接收或读取并包装成 *event*, 经由给定的 *interceptor* 去做处理(数据清洗或过滤, 可按需丢弃), 最后将处理后的 *event* 发送给特定的 *sink* 并由这个 *sink* 将其加工发送给外部系统 (e.g.: 包装 Http Request, 批处理等) , 至此一条数据的处理完毕
+数据 (或者说消息) 的最小单位是 *event* , 它们被 *source* 从外部服务接收或读取并包装成 *event*, 经由给定的 *interceptor* 去做处理(数据清洗或过滤, 可按需丢弃), 最后将处理后的 *event* 发送给特定的 *sink* 并由这个 *sink* 将其加工发送给外部系统 (e.g.: 包装 Http Request, 批处理等) , 至此一条或者一批的消息算处理完毕
 
 ## 内置组件列表
 
@@ -26,18 +26,21 @@
 | :----------------------------: | :-----------: | :-----------------------------: |
 | atiesh.source.DevZero          | Source        | 生成消息内容为 "0" 的消息       |
 | atiesh.source.KafkaSource      | Source        | 消费 Kafka 消息队列             |
+| atiesh.source.HttpSource       | Source        | 接收 Http 请求并从中获取消息    |
 | atiesh.interceptor.DevNull     | Interceptor   | 拦截并丢弃所有消息              |
 | atiesh.interceptor.Transparent | Interceptor   | 拦截并放行所有消息              |
 | atiesh.sink.DevNull            | Sink          | 接收并丢弃所有消息              |
 | atiesh.sink.KafkaSink          | Sink          | 接收并将消息写入 Kafka 消息队列 |
-| atiesh.utils.http.CachedProxy  | UtilComponent | 外部 Http 访问 & 缓存工具       |
+| atiesh.sink.HttpSink           | Sink          | 接收并将消息写入 Http 远端服务  |
+| atiesh.utils.http.CachedProxy  | Extension     | 外部 Http 访问 & 缓存工具       |
 
-- 这些组件通常用于测试以及当作简单的组件开发示例 ( *CachedProxy* 除外)
+- 这些 *Source* 和 *Sink* 组件只提供非常简单的功能, 意在当作简单的组件开发示例
 - *DevNull* 的 *sink* 有时可以拿来处理废弃的消息从而避免日志中出现找不到 *sink* 的噪音
+- *CachedProxy* 扩展组件通常用来当作远端配置同步器使用
 
 # 组件和语义 (Components & Semantics)
 
-组件是用于实现数据处理器的基础抽象, 而语义则是用来实现各类协议的基础抽象, 语义最终将使用 Scala 的 *蛋糕模式 (cake pattern)* 在声明组件类的定义时通过 ``extends ... with ... with ...`` 的方式方便的引入进来
+组件是用于实现数据处理器的基础抽象, 而语义则是用来实现各类协议的基础抽象, 语义最终将使用 Scala 的 *蛋糕模式 (cake pattern)* 在声明组件类的定义时通过 ``extends ... with ... with ...`` 的方式方便的引入进最终的组件实现
 
 目前内置的组件通过不同包和项目的形式存在, 这样做的目的是将基础核心包的依赖列表尽可能的减少. 当你在使用核心框架构建你自己的数据流时, 可以最大限度的减少本项目引入的依赖
 
@@ -53,13 +56,16 @@
 
 除 *BatchSinkSemantics* 为核心项目内置外, 其它分不同项目支持了如下几种语义
 
-| 语义名称                           | 类型            | 用途                      |
-| :--------------------------------: | :-------------: | :-----------------------: |
-| atiesh.sink.BatchSinkSemantics     | SinkSemantics   | 批处理维护                |
-| atiesh.sink.HttpSinkSemantics      | SinkSemantics   | 协议支持 - Http           |
-| atiesh.sink.SyslogSinkSemantics    | SinkSemantics   | 协议支持 - Syslog         |
-| atiesh.sink.KafkaSinkSemantics     | SinkSemantics   | 协议支持 - Kafka Producer |
-| atiesh.source.KafkaSourceSemantics | SourceSemantics | 协议支持 - Kafka Consumer |
+| 语义名称                                    | 类型            | 用途                            |
+| :-----------------------------------------: | :-------------: | :-----------------------------: |
+| atiesh.sink.BatchSinkSemantics              | SinkSemantics   | 批处理维护                      |
+| atiesh.sink.HttpSinkSemantics               | SinkSemantics   | 协议支持 - Http Client          |
+| atiesh.sink.HttpSourceSemantics             | SourceSemantics | 协议支持 - Http Server          |
+| atiesh.sink.KafkaSinkSemantics              | SinkSemantics   | 协议支持 - Kafka Producer       |
+| atiesh.source.KafkaSourceSemantics          | SourceSemantics | 协议支持 - Kafka Consumer       |
+| atiesh.source.DirectoryWatchSourceSemantics | SourceSemantics | 协议支持 - 文件系统目录监听     |
+| atiesh.sink.SyslogSinkSemantics             | SinkSemantics   | 协议支持 - Syslog               |
+| atiesh.sink.AliyunSLSSinkSemantics          | SinkSemantics   | 协议支持 -  Aliyun SLS Producer |
 
 ## API 层级
 
