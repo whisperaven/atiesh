@@ -7,26 +7,32 @@ package atiesh.sink
 // java
 import java.util.Properties
 // scala
-import scala.concurrent.{ Promise, Future }
+import scala.concurrent.{ ExecutionContext, Promise, Future }
 import scala.collection.JavaConverters._
+// akka
+import akka.actor.ActorSystem
 // kafka
-import org.apache.kafka.clients.producer.{ KafkaProducer, ProducerRecord, RecordMetadata, Callback }
+import org.apache.kafka.clients.producer.{ KafkaProducer, ProducerRecord,
+                                           RecordMetadata, Callback }
 // internal
 import atiesh.event.Event
 import atiesh.statement.{ Ready, Closed }
 import atiesh.utils.{ Configuration, Logging }
 
-object KafkaSinkSemantics {
+object KafkaSinkSemantics extends Logging {
   object KafkaSinkSemanticsOpts {
-    val OPT_PRODUCER_PROPERTIES_SECTION = "kafka-properties"
+    val OPT_KAFKA_PRODUCER_PROPERTIES_SECTION = "kafka-properties"
+
+    val OPT_AKKA_DISPATCHER = "kafka-akka-dispatcher"
+    val DEF_AKKA_DISPATCHER = "akka.actor.default-dispatcher"
   }
-}
 
-trait KafkaSinkSemantics extends SinkSemantics with Logging { this: Sink =>
-  import KafkaSinkSemantics._
+  // parse each record into (uuid, partition, timestamp)
+  type MetadataParser = Event => (Option[String], Option[Int], Option[Long])
 
-  private var producer: KafkaProducer[String, String] = _
-  def createProducer(name: String, pcf: Option[Configuration]): KafkaProducer[String, String] = {
+  def createProducer(
+    owner: String,
+    pcf: Option[Configuration]): KafkaProducer[String, String] = {
     val props = new Properties()
     pcf match {
       case Some(c) =>
@@ -34,69 +40,136 @@ trait KafkaSinkSemantics extends SinkSemantics with Logging { this: Sink =>
           props.put(k, v)
         }
       case None =>
-        throw new SinkInitializeException("can not initialize kafka sink semantics, missing producer properties")
+        throw new SinkInitializeException(
+          "can not initialize kafka sink semantics, " +
+          "missing producer properties")
     }
 
     val producer = new KafkaProducer[String, String](props)
-    logger.debug("sink <{}> producer created", name)
+    logger.debug("sink <{}> producer created", owner)
 
     producer
   }
-  
-  def createProducerCB(p: Promise[RecordMetadata]): Callback = {
+}
+
+trait KafkaSinkSemantics
+  extends SinkSemantics
+  with KafkaSinkMetrics
+  with Logging { this: Sink =>
+  import KafkaSinkSemantics.{ KafkaSinkSemanticsOpts => Opts, _ }
+
+  final private[this] var kafkaDispatcher: String = _
+  final private[this] var kafkaExecutionContext: ExecutionContext = _
+
+  final def getKafkaDispatcher: String = kafkaDispatcher
+  final def getKafkaExecutionContext: ExecutionContext = kafkaExecutionContext
+
+  final private[this] var kafkaProducer: KafkaProducer[String, String] = _
+
+  override def bootstrap()(implicit system: ActorSystem): Unit = {
+    super.bootstrap()
+
+    kafkaDispatcher = getConfiguration.getString(Opts.OPT_AKKA_DISPATCHER,
+                                                 Opts.DEF_AKKA_DISPATCHER)
+    kafkaExecutionContext = system.dispatchers.lookup(kafkaDispatcher)
+  }
+
+  final def createProduceCB(p: Promise[RecordMetadata]): Callback =
     new Callback {
-      override def onCompletion(metadata: RecordMetadata, exception: Exception): Unit = {
+      override def onCompletion(metadata: RecordMetadata,
+                                exception: Exception): Unit = {
         if (exception == null) {
+          metricsKafkaSinkTopicPartitionEventPublishSuccessCounter(
+            metadata.topic, metadata.partition).increment()
+          metricsKafkaSinkEventPublishSuccessCounter.increment()
+          metricsKafkaSinkComponentEventPublishSuccessCounter.increment()
           p.success(metadata)
         } else {
+          if (metadata != null) {
+            metricsKafkaSinkTopicPartitionEventPublishFailedCounter(
+              metadata.topic, metadata.partition).increment()
+          }
+          metricsKafkaSinkEventPublishFailedCounter.increment()
+          metricsKafkaSinkComponentEventPublishFailedCounter.increment()
           p.failure(exception)
         }
       }
     }
-  }
 
-  def send(event: Event, topic: String)
-          (parser: Event => (Option[String], Option[Int], Option[Long])): Future[RecordMetadata] = {
+  /**
+   * According to the document of <Kafka Client>, the producer may block
+   * maximum <max.block.ms> mills when the internal buffer is filled (which
+   * maximum <buffer.memory> bytes) or metadata unavailable.
+   *
+   * The Future instance returned by this method represent the send result
+   * of event which is already append to the internal buffer of the producer
+   * instance. After buffer is filled, the send method will be block.
+   */
+  final def kafkaSend(event: Event,
+                      topic: String,
+                      parser: MetadataParser): Future[RecordMetadata] = {
     val record = parser(event) match {
       case (None, None, None) =>
         Some(new ProducerRecord[String, String](topic, event.getBody))
       case (Some(key), None, None) =>
         Some(new ProducerRecord[String, String](topic, key, event.getBody))
       case (Some(key), Some(partation), None) =>
-        Some(new ProducerRecord[String, String](topic, partation, key, event.getBody))
+        Some(new ProducerRecord[String, String](topic, partation,
+                                                key, event.getBody))
       case (Some(key), Some(partation), Some(timestamp)) =>
-        Some(new ProducerRecord[String, String](topic, partation, timestamp, key, event.getBody))
+        Some(new ProducerRecord[String, String](topic, partation, timestamp,
+                                                key, event.getBody))
       case _ =>
         None
     }
 
     record match {
       case Some(r) =>
-        val promise = Promise[RecordMetadata]()
-        producer.send(r, createProducerCB(promise))
-        promise.future
+        try {
+          val p = Promise[RecordMetadata]()
+          kafkaProducer.send(r, createProduceCB(p))
+          p.future
+        } catch {
+          case exc: Throwable =>
+            Future.failed[RecordMetadata](exc)
+        }
       case None =>
         Future.failed[RecordMetadata](new SinkInvalidEventException(
-          "bad event parser response, cannot create record instance, the parser should return a tuple contains" +
-          "<None, None, None> or <key, None, None> or <key, partation, None> or <key, partation, timestamp>"))
+          "bad event parser response, cannot create record instance, the " +
+          "parser should return a tuple which contains <None, None, None> " +
+          "or <key, None, None> or <key, partation, None> " +
+          "or <key, partation, timestamp>"))
     }
   }
 
-  override def start(ready: Promise[Ready]): Unit = {
-    val cfg = getConfiguration
-    val pcf = cfg.getSection(KafkaSinkSemanticsOpts.OPT_PRODUCER_PROPERTIES_SECTION)
-
-    producer = createProducer(getName, pcf)
-
-    super.start(ready)
+  final def kafkaFlush(): Unit = {
+    try {
+      kafkaProducer.flush()
+    } catch {
+      case exc: Throwable =>
+        logger.error(
+          s"sink <${getName}> cannot flush the kafka producer instance", exc)
+    }
   }
 
-  override def stop(closed: Promise[Closed]): Unit = {
-    logger.debug("sink <{}> producer flush all records", getName)
-    producer.flush()
-    logger.debug("sink <{}> closing producer instance", getName)
-    producer.close()
+  override def open(ready: Promise[Ready]): Unit = {
+    val cfg = getConfiguration
 
-    super.stop(closed)
+    kafkaProducer =
+      createProducer(getName,
+                     cfg.getSection(Opts.OPT_KAFKA_PRODUCER_PROPERTIES_SECTION))
+
+    super.open(ready)
+  }
+
+  override def close(closed: Promise[Closed]): Unit = {
+    logger.debug("sink <{}> producer flushing all records", getName)
+    kafkaProducer.flush()
+
+    logger.debug("sink <{}> flushed all records, closing producer instance",
+                 getName)
+    kafkaProducer.close()
+
+    super.close(closed)
   }
 }

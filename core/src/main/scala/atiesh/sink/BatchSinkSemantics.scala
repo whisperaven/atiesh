@@ -5,201 +5,224 @@
 package atiesh.sink
 
 // java
-import java.util.concurrent.Semaphore
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.{ ConcurrentHashMap => JCHashMap }
+import java.util.function.{ BiFunction => JBiFunc }
 // scala
 import scala.util.{ Success, Failure }
 import scala.collection.mutable
+import scala.collection.JavaConverters._
 import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Promise, Await }
 // akka
-import akka.actor.{ Props, Actor, ActorSystem, ActorRef, Cancellable }
+import akka.actor.{ Props, Actor, ActorRef,
+                    ActorSystem, Scheduler, Cancellable }
 import akka.event.LoggingReceive
 // internal
 import atiesh.event.Event
-import atiesh.statement.{ Commit, Transaction, Close, Closed }
+import atiesh.statement.{ Close, Closed, Batch }
 import atiesh.utils.{ Configuration, Logging }
 
-trait BatchSinkSemantics extends SinkSemantics with Logging { this: Sink =>
-  object BatchSemanticsOpts {
+object BatchSinkSemantics {
+  object BatchSinkSemanticsOpts {
+    /* 0 meanes infinite size */
     val OPT_BATCH_SIZE = "batch-size"
-    val DEF_BATCH_SIZE = 0                            /* 0 meanes infinite size */
+    val DEF_BATCH_SIZE = 0
+    /* 0 meanes infinite timeout */
     val OPT_BATCH_TIMEOUT = "batch-timeout"
-    val DEF_BATCH_TIMEOUT = Duration(0, MILLISECONDS) /* 0 meanes infinite timeout */
-    val OPT_BATCHSINK_AKKA_DISPATCHER = "batch-akka-dispatcher"
-    val DEF_BATCHSINK_AKKA_DISPATCHER = "akka.actor.default-dispatcher"
+    val DEF_BATCH_TIMEOUT = Duration(0, MILLISECONDS)
+    val OPT_BATCH_AKKA_DISPATCHER = "batch-akka-dispatcher"
+    val DEF_BATCH_AKKA_DISPATCHER = "akka.actor.default-dispatcher"
   }
-  val DEF_BATCH_CATEGORY = "default"
+  val DEF_BATCH_TAG = "__atiesh_default__"
 
-  object BatchManagerActor {
-    def props(): Props = Props(new BatchManagerActor())
-  }
-  class BatchManagerActor extends Actor with Logging {
-    implicit val system = context.system
-    implicit val actionSlots = new Semaphore(1)
-
-    val currentBatchs = mutable.Map[String, Batch]()
-    override def receive: Receive = LoggingReceive {
-      case AppendEvent(category, event) =>
-        val current = currentBatchs.getOrElseUpdate(category, Batch(category, batchSize, batchTimeout, batchAction(category)))
-        val batch = current.append(event)
-        if (current != batch) currentBatchs(category) = batch
-
-      case FlushEvent(flushed) =>
-        currentBatchs.foldLeft(())({ case (_, (k, v)) =>
-          logger.info("<Batch.{}> flusing batch of <{}> before close", getName, k)
-          v.flush(false)
-        })
-        flushed.success(Closed(s"Batch.${getName}"))
-    }
-  }
-  case class AppendEvent(batchKey: String, evnet: Event)
-  case class FlushEvent(flushed: Promise[Closed])
-
-  var batchManager: ActorRef = _
-  var batchSize: Int = _
-  var batchTimeout: FiniteDuration = _
-  var batchExecutionContext: ExecutionContext = _
-
-  object Batch extends Logging {
-    def apply(
-      category: String,
-      size: Int,
-      timeout: FiniteDuration,
-      action: List[Event] => Unit)(implicit system: ActorSystem, slots: Semaphore): Batch = {
-
-      logger.debug(
-        "creating new batch with size <{}> and timeout <{}>", size, timeout)
-      new Batch(category, size, timeout, action, None)
-    }
-
-    def apply(
-      category: String,
-      size: Int,
-      timeout: FiniteDuration,
-      action: List[Event] => Unit,
-      event: Event)(implicit system: ActorSystem, slots: Semaphore): Batch = {
-
-      logger.debug(
-        "creating new batch with initial event <{}> and size <{}> and timeout <{}>", event.getBody, size, timeout)
-      new Batch(category, size, timeout, action, Some(event))
-    }
+  private[sink] object BatchBuffer extends Logging {
+    def apply(size: Int): BatchBuffer =
+      new BatchBuffer(size, None)
+    def apply(size: Int, event: Event): BatchBuffer =
+      new BatchBuffer(size, Some(event))
   }
 
-  class Batch(
-    category: String,
-    size: Int,
-    timeout: FiniteDuration,
-    action: List[Event] => Unit,
-    initial: Option[Event])(implicit system: ActorSystem, slots: Semaphore) extends Logging {
-
-    val op = new Semaphore(1)
-    val done = new AtomicBoolean(false)
-    val buffer = initial match {
+  private[sink] class BatchBuffer(size: Int,
+                                  initial: Option[Event]) extends Logging {
+    final private[this] val buffer = initial match {
       case Some(event) =>
         mutable.ArrayBuffer[Event](event)
       case None =>
         mutable.ArrayBuffer[Event]()
     }
+    final def isFull: Boolean = size > 0 && buffer.length >= size
+    final def append(event: Event): Unit = buffer.append(event)
+    final def asBatch(tag: String): Batch = Batch(buffer.toList, tag)
+  }
 
-    val flushTask: Option[Cancellable] = {
-      if (timeout.length > 0) {
-        Some(system.scheduler.scheduleOnce(timeout)(onTimeout)(batchExecutionContext))
-      } else {
-        None
-      }
+  private[sink] case class Flush(tag: String, timeout: Boolean)
+  private[sink] case class FlushableBatchBuffer(buf: BatchBuffer,
+                                                task: Option[Cancellable]) {
+    final def isFull: Boolean = buf.isFull
+    final def append(event: Event): Unit = buf.append(event)
+    final def asBatch(tag: String): Batch = buf.asBatch(tag)
+
+    final def cancel: Boolean = task match {
+      case Some(cancelable) => cancelable.cancel()
+      case _ => true
     }
+  }
+}
 
-    def append(event: Event): Batch = {
-      /*
-       * remember, we are inside the BatchManager actor, which means this method
-       *  is single threaded and the <op> semaphore can be acquired under two circumstances:
-       *    1, right now right here, inside the append method (protect this append from the flush task)
-       *    2, flush task is already running (which means you need a new Batch for this event)
-       */
-      if (done.get() || !op.tryAcquire()) {
-        Batch(category, size, timeout, action, event)
-      } else {
-        buffer.append(event)
-        op.release()
+/**
+ * Atiesh semantics which represent a sink component with batch supported.
+ */
+trait BatchSinkSemantics
+  extends SinkSemantics
+  with Logging { this: Sink =>
+  import BatchSinkSemantics.{ BatchSinkSemanticsOpts => Opts, _ }
+  object BatchManagerActor {
+    /*
+     * Inner class BantchManagerActor class are different class in each
+     * Sink instances, we need create them inside each instance,
+     * otherwise you may got unstable identifier issues
+     */ 
+    def props(): Props = Props(new BatchManagerActor())
+  }
+  final private class BatchManagerActor extends Actor with Logging {
+    override def receive: Receive = LoggingReceive {
+      case event: Event =>
+        val tag = batchTag(event)
+        val buf = batchAggregate(event, tag)
 
-        if (size > 0 && buffer.length >= size) {
-          flush(false)
-          Batch(category, size, timeout, batchAction(category))
-        } else {
-          this
+        if (buf.isFull) {
+          batchFlush(tag, false)
         }
-      }
-    }
 
-    def flush(isTimeout: Boolean): Unit = {
-      if (done.compareAndSet(false, true)) {
-        op.acquire()
-        if (flushTask.nonEmpty && !isTimeout) {
-          val task = flushTask.get
-          if (task.cancel()) logger.debug("batch full, cancel batch timeout flush task")
-          else logger.warn("can not cancel batch timeout flush task when batch was full, ignore")
-        }
-        if (buffer.length <= 0) {
-          logger.debug("got empty batch, skip this action")
-        } else {
-          logger.debug("acquire action slot to flush batch")
-          slots.acquire()
-          action(buffer.toList)
-          slots.release()
-          logger.debug("batch flush finished, slot became idle")
-        }
-      }
-    }
+      case Flush(tag, timeout) => /* all flush start here */
+        batchFlush(tag, timeout)
 
-    def onTimeout(): Unit = {
-      flush(true)
+      case Close(closed) =>
+        batchFlush(closed)
     }
   }
 
-  override def stop(closed: Promise[Closed]): Unit = {
-    val fp = Promise[Closed]()
-    batchManager ! FlushEvent(fp)
-    Await.ready(fp.future, Duration.Inf).value.get match {
-      case Success(flushed) =>
-        logger.debug("<{}> flushed all batchs", flushed.component)
-      case Failure(exc) =>
-        logger.error(s"batch manager of sink <${getName}> can not flush pending batchs, skip flush", exc)
-    }
-    super.stop(closed)
-  }
+  final private[this] var batchManager: ActorRef = _
+  final def batchManagerRef: ActorRef = batchManager
+  final def batchManagerName: String = s"actor.sink.${getName}.batchManager"
 
-  override def bootstrap()(implicit system: ActorSystem): Sink = {
+  final private[this] val buffers =
+    new JCHashMap[String, FlushableBatchBuffer]()
+  final private[this] var batchSize: Int = _
+  final private[this] var batchTimeout: FiniteDuration = _
+  final private[this] var batchDispatcher: String = _
+
+  final private[this] var batchScheduler: Scheduler = _
+  final private[this] var batchExecutionContext: ExecutionContext = _
+
+  final def getBatchDispatcher: String = batchDispatcher
+  final def getBatchExecutionContext: ExecutionContext = batchExecutionContext
+
+  override def bootstrap()(implicit system: ActorSystem): Unit = {
     super.bootstrap()
 
     val cfg = getConfiguration
-    val akkaDispatcher = cfg.getString(
-      BatchSemanticsOpts.OPT_BATCHSINK_AKKA_DISPATCHER,
-      BatchSemanticsOpts.DEF_BATCHSINK_AKKA_DISPATCHER)
-
-    batchSize = cfg.getInt(BatchSemanticsOpts.OPT_BATCH_SIZE, BatchSemanticsOpts.DEF_BATCH_SIZE)
-    batchTimeout = cfg.getDuration(BatchSemanticsOpts.OPT_BATCH_TIMEOUT, BatchSemanticsOpts.DEF_BATCH_TIMEOUT)
+    batchSize = cfg.getInt(Opts.OPT_BATCH_SIZE, Opts.DEF_BATCH_SIZE)
+    batchTimeout = cfg.getDuration(Opts.OPT_BATCH_TIMEOUT,
+                                   Opts.DEF_BATCH_TIMEOUT)
+    batchDispatcher = cfg.getString(Opts.OPT_BATCH_AKKA_DISPATCHER,
+                                    Opts.DEF_BATCH_AKKA_DISPATCHER)
 
     if (batchSize <= 0 && batchTimeout.length == 0) {
       throw new SinkInitializeException(
-        s"cannot initialize batch manager with both infinite size and infinite timeout " +
-        s"you may want change the setting of ${BatchSemanticsOpts.OPT_BATCH_SIZE} or " +
-        s"${BatchSemanticsOpts.DEF_BATCH_SIZE} to nonzero value")
+        s"cannot initialize batch manager with both infinite size and " +
+        s"infinite timeout, you may want change the settings of " +
+        s"${Opts.OPT_BATCH_SIZE} or ${Opts.DEF_BATCH_SIZE} to nonzero value")
     }
     if (batchSize == 1) {
       throw new SinkInitializeException(
-        s"cannot initialize batch manager with batch size is 1 which is meaningless " +
-        s"you may want change the setting of ${BatchSemanticsOpts.OPT_BATCH_SIZE} greater than 1")
+        s"cannot initialize batch manager with batch size 1, which is " +
+        s"meaningless you may want change the setting of " +
+        s"${Opts.OPT_BATCH_SIZE} greater than 1")
     }
-    batchManager = system.actorOf(BatchManagerActor.props().withDispatcher(akkaDispatcher), s"${getName}.batchManager")
-    batchExecutionContext = system.dispatchers.lookup(akkaDispatcher)
+    batchScheduler = system.scheduler
+    batchExecutionContext = system.dispatchers.lookup(batchDispatcher)
 
-    this
+    batchManager = system.actorOf(
+      BatchManagerActor.props().withDispatcher(batchDispatcher),
+      batchManagerName)
   }
 
-  def batchAppend(event: Event): Unit = batchAppend(DEF_BATCH_CATEGORY, event)
-  def batchAction(events: List[Event]): Unit
+  final private[this] def batchAggregate(event: Event,
+                                         tag: String): FlushableBatchBuffer =
+    buffers.compute(tag, new JBiFunc[String, FlushableBatchBuffer,
+                                             FlushableBatchBuffer] {
+      override def apply( /* key == tag, we use key inside apply */
+        key: String,
+        value: FlushableBatchBuffer): FlushableBatchBuffer = {
+        if (value == null) {
+          val buf = BatchBuffer(batchSize, event)
+          val flushTask = {
+            if (batchTimeout.length > 0) {
+              val task = batchScheduler.scheduleOnce(
+                batchTimeout, batchManager, Flush(key, true))(
+                batchExecutionContext)
+              Some(task)
+            } else None
+          }
+          FlushableBatchBuffer(buf, flushTask)
+        } else {
+          value.append(event)
+          value
+        }
+      }
+    })
 
-  def batchAppend(category: String, event: Event): Unit = batchManager ! AppendEvent(category, event)
-  def batchAction(category: String): List[Event] => Unit = batchAction
+  final private[this] def batchFlush(tag: String, timeout: Boolean): Unit = {
+    val fb = buffers.remove(tag)
+    if (fb == null) { /* batch already flushed */
+      if (timeout) {
+        logger.debug("timeout but batch (tag: <{}>) " +
+                     "already flushed, ignored", tag)
+      } else {
+        logger.debug("batch (tag: <{}>) was full or sink being closed, " +
+                     "but batch already flushed, ignored", tag)
+      }
+    } else {
+      if (!timeout) { /* we should cancel scheduled task when batch was full */
+        if (fb.cancel) {
+          logger.debug("batch (tag: <{}>) full, flush task " +
+                       "cancelled, flushing now", tag)
+        } else {
+          logger.debug("batch (tag: <{}>) full, flush task " +
+                       "cancel failed, ignored", tag)
+        }
+      }
+      ref ! fb.asBatch(tag)
+    }
+  }
+
+  final private[this] def batchFlush(closed: Promise[Closed]): Unit = {
+    if (buffers.isEmpty()) {
+      closed.success(Closed(getName))
+    } else {
+      buffers.keySet().iterator().asScala
+             .foreach(tag => { batchFlush(tag, false) })
+      batchManager ! Close(closed)
+    }
+  }
+
+  override def close(closed: Promise[Closed]): Unit = {
+    val p = Promise[Closed]()
+    batchManager ! Close(p)
+
+    Await.ready(p.future, Duration.Inf).value.get match {
+      case Success(flushed) =>
+        logger.debug("batch manager of sink <{}> flush " +
+                     "all internal buffers", getName)
+      case Failure(exc) =>
+        logger.error(s"batch manager of sink <${getName}> can not " +
+                     s"flush internal buffers, skip flush", exc)
+    }
+    super.close(closed)
+  }
+
+  def batchAppend(event: Event): Unit = batchManager ! event
+
+  def batchTag(event: Event): String = DEF_BATCH_TAG
 }

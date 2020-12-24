@@ -7,42 +7,252 @@ package atiesh.source
 // java
 import java.util.concurrent.atomic.AtomicBoolean
 // scala
-import scala.concurrent.{ Promise, Future, Await }
 import scala.util.{ Try, Success, Failure }
-import scala.collection.mutable.HashSet
+import scala.collection.JavaConverters._
+import scala.collection.mutable
 import scala.concurrent.duration._
+import scala.concurrent.{ ExecutionContext, Promise, Future, Await }
 // akka
 import akka.actor.{ Props, Actor, ActorSystem, ActorRef }
 import akka.event.LoggingReceive
 // internal
 import atiesh.event.{ Event, Empty }
-import atiesh.statement.{ Open, Ready, Close, Closed, Continue, Commit, Transaction }
+import atiesh.statement.{ Open, Ready, Close, Closed, Continue, Signal,
+                          Offer, Confirmation, Commit, Transaction }
+import atiesh.component.ExtendedComponent
 import atiesh.sink.Sink
 import atiesh.interceptor.Interceptor
-import atiesh.utils.{ Configuration, ClassLoader, Logging }
-import atiesh.metrics.MetricsGroup._
+import atiesh.utils.{ Configuration, ComponentLoader, Logging }
 
-trait Source {
-  def getName: String
-  def getDispatcher: String
-  def getConfiguration: Configuration
-  def getInterceptors: List[Interceptor]
-  def getSinks: List[Sink]
-  def getSinkSelectStrategy: String
+trait SourceType {
+  final val componentType = "source"
+}
 
-  val shuttingDown = new AtomicBoolean(false)
+object Source extends SourceType with Logging {
+  object SourceOpts {
+    val OPT_FQCN = "fqcn"
+    val OPT_INTERCEPTORS = "interceptors"
+    val DEF_INTERCEPTORS = List[String]()
+    val OPT_SINKS = "sinks"
+    val DEF_SINKS = List[String]()
+    val OPT_AKKA_DISPATCHER = "akka-dispatcher"
+    val DEF_AKKA_DISPATCHER = "akka.actor.default-blocking-io-dispatcher"
 
-  def scheduleNextCycle(): Unit = ref ! Continue
+    import SinkSelectStrategies._
+    val OPT_SINK_SELECT_STRATEGY = "sink-select-strategy"
+    val DEF_SINK_SELECT_STRATEGY = DEFAULT_SELECT_STRATEGY
+  }
 
-  def bootstrap()(implicit system: ActorSystem): Source
+  object SinkSelectStrategies {
+    val FIRST_ACCEPTED = "first-accepted"
+    val SKIP_ACCEPT_CHECK_ON_SINGLE = "skip-accept-check-on-single"
+
+    val DEFAULT_SELECT_STRATEGY = SKIP_ACCEPT_CHECK_ON_SINGLE
+
+    def isValidStrategy(strategy: String): Boolean = {
+      strategy == SKIP_ACCEPT_CHECK_ON_SINGLE ||
+        strategy == FIRST_ACCEPTED
+    }
+  }
+  type Acknowledge = Try[List[Transaction]]
+
+  private[atiesh] def initializeComponents(
+    scfs: Configuration,
+    interceptors: List[Interceptor],
+    sinks: List[Sink])(implicit system: ActorSystem): Try[List[Source]] =
+    scfs.getSections()
+      /* read & parse configuration sections */
+      .foldLeft(List[(String, Configuration)]())((cfgs, sn) => {
+        scfs.getSection(sn).map(scf => {
+          logger.debug("readed configuration section <{}> with content " +
+                       "<{}> for initialize source(s)", sn, scf)
+          (sn -> scf) :: cfgs
+        }).getOrElse(cfgs)
+      })
+      /* load & initialize */
+      .foldLeft(List[Try[Source]]())({
+        case (comps, (name, cfg)) => {
+          val ints =
+            cfg.getStringList(SourceOpts.OPT_INTERCEPTORS,
+                              SourceOpts.DEF_INTERCEPTORS)
+              .foldLeft(List[Interceptor]())((used, interceptorName) => {
+                interceptors.find(_.getName == interceptorName) match {
+                  case Some(i) =>
+                    i :: used
+                  case None =>
+                    throw new SourceInitializeException(
+                      s"configurated interceptor <${interceptorName}> " +
+                      s"not found during source <${name}> initialize, " +
+                      s"abort initialize")
+                }
+              }).sortBy(-_.getPriority)
+          val sks =
+            cfg.getStringList(SourceOpts.OPT_SINKS, SourceOpts.DEF_SINKS)
+              .foldLeft(List[Sink]())((used, sinkName) => {
+                sinks.find(_.getName == sinkName) match {
+                  case Some(sk) =>
+                    sk :: used
+                  case None =>
+                    throw new SourceInitializeException(
+                      s"configurated sink <${sinkName}> not found during " +
+                      s"source <${name}> initialize, abort initialize")
+                }
+              }).reverse
+          val strategy = {
+            val _s = cfg.getString(SourceOpts.OPT_SINK_SELECT_STRATEGY,
+                                   SourceOpts.DEF_SINK_SELECT_STRATEGY)
+            if (SinkSelectStrategies.isValidStrategy(_s)) _s
+            else throw new SourceInitializeException(
+                   s"configurated invalid sink select strategy <${_s}> " +
+                   s"was found during source <${name}> initialize, " +
+                   s"abort initialize")
+          }
+          initializeComponent(name, cfg, ints, sks, strategy) :: comps
+        }
+      })
+      /* inspect */
+      .foldLeft(Try(List[Source]()))((sources, source) => {
+        sources.flatMap(srcs => {
+          source match {
+            case Success(s) => Success(s :: srcs)
+            case Failure(exc) => Failure(exc)
+          }
+        })
+      })
+
+  private[source] def initializeComponent(
+    name: String,
+    scf: Configuration,
+    interceptors: List[Interceptor],
+    sinks: List[Sink],
+    strategy: String)(implicit system: ActorSystem): Try[Source] = Try {
+    val fqcn = scf.getString(SourceOpts.OPT_FQCN)
+    val dispatcher = scf.getString(SourceOpts.OPT_AKKA_DISPATCHER,
+                                   SourceOpts.DEF_AKKA_DISPATCHER)
+
+    logger.debug("loading source {} (class: {}) with configuration: {}",
+                 name, fqcn, scf)
+    val source = ComponentLoader.createInstanceFor[Source](
+      fqcn, List[(Class[_], AnyRef)](
+        (classOf[String], name),
+        (classOf[String], dispatcher),
+        (classOf[Configuration], scf),
+        (classOf[List[Interceptor]], interceptors),
+        (classOf[List[Sink]], sinks),
+        (classOf[String], strategy)
+      ))
+    source.bootstrap()
+
+    logger.info("loaded source {} (class: {}) with configuration: {}",
+                source.getName, fqcn, source.getConfiguration)
+    source
+  }
+}
+
+/**
+ * Atiesh semantics which represent a source component.
+ */
+trait SourceSemantics
+  extends Logging { this: ExtendedComponent with SourceMetrics =>
   object SourceActor {
+    /*
+     * Inner class SourceActor class are different class in each
+     * Source instances, we need create them inside each instance,
+     * otherwise you may got unstable identifier issues
+     */ 
     def props(): Props = Props(new SourceActor())
   }
-  class SourceActor extends Actor with Logging {
+  final private class SourceActor extends Actor with Logging {
     override def receive: Receive = LoggingReceive {
+      case Offer(events, confirm) =>
+        if (!shuttingDown.get()) {
+          sourceCycle(events)
+          val acks = commit()
+
+          try {
+            doneCycle(acks)
+          } catch {
+            case exc: Throwable =>
+              logger.error(s"passive source <${getName}> throw unexpected " +
+                           s"exception inside handler doneCycle, which " +
+                           s"means you may use a source component with " +
+                           s"wrong implementation", exc)
+          }
+          acks match {
+            case Success(_) =>
+              confirm.success(Confirmation(getName))
+            case Failure(exc) =>
+              confirm.failure(exc)
+              metricsSourceCycleErrorCounter.increment()
+              metricsSourceComponentCycleErrorCounter.increment()
+          }
+
+          metricsSourceCycleRunCounter.increment()
+          metricsSourceComponentCycleRunCounter.increment()
+        } else confirm.failure(
+            new IllegalStateException(s"got offer statement but source " +
+                                      s"<${getName}> was shutting down"))
+      case Continue =>
+        if (!shuttingDown.get()) {
+          val events = Try { mainCycle() } match {
+            case Success(evs) => evs
+            case Failure(exc) =>
+              logger.error(s"source <${getName}> throw unexpected " +
+                           s"exception inside handler mainCycle, " +
+                           s"which means you may use a source component " +
+                           s"with wrong implementation", exc)
+              List[Event]()
+          }
+
+          if (events.nonEmpty) {
+            sourceCycle(events)
+            val acks = commit()
+
+            acks.recover({
+              case exc: Throwable =>
+                metricsSourceCycleErrorCounter.increment()
+                metricsSourceComponentCycleErrorCounter.increment()
+            })
+
+            try {
+              doneCycle(acks)
+            } catch {
+              case exc: Throwable =>
+                logger.error(s"source <${getName}> throw unexpected " +
+                             s"exception inside handler doneCycle, " +
+                             s"which means you may use a source component " +
+                             s"with wrong implementation", exc)
+            }
+          }
+          scheduleNextCycle()
+
+          metricsSourceCycleRunCounter.increment()
+          metricsSourceComponentCycleRunCounter.increment()
+        } else {
+          logger.warn(s"ignored continue statement, " +
+                      s"source <${getName}> shutting down")
+        }
+
+      case Signal(sig) =>
+        metricsSourceSignalAcceptedCounter.increment()
+        metricsSourceComponentSignalAcceptedCounter.increment()
+
+        try {
+          process(sig)
+        } catch {
+          case exc: Throwable =>
+            logger.error(s"source <${getName}> throw unexpected exception" +
+                         s"inside handler process (for signal <${sig}>), " +
+                         s"whitch means you may use a source component " +
+                         s"with wrong implementation", exc)
+        }
+
       case Open(ready) =>
         try {
-          start(ready)
+          open(ready)
+          if (isActive) {
+            scheduleNextCycle()
+          }
         } catch {
           case exc: Throwable =>
             ready.failure(exc)
@@ -50,293 +260,304 @@ trait Source {
 
       case Close(closed) =>
         try {
-          if (shuttingDown.compareAndSet(false, true)) stop(closed)
+          if (shuttingDown.compareAndSet(false, true)) {
+            close(closed)
+          }
         } catch {
           case exc: Throwable =>
             closed.failure(exc)
         }
-
-      case Continue =>
-        if (!shuttingDown.get()) {
-          mainCycle()
-          SourceMetrics.cycleRunsCount.increment()
-          scheduleNextCycle()
-        }
     }
   }
-  var ref: ActorRef = _
+  final private[source] var ref: ActorRef = _
+  final def actorRef: ActorRef = ref
+  final def actorName: String = s"actor.source.${getName}"
 
-  def open(ready: Promise[Ready]): Future[Ready]
-  def start(ready: Promise[Ready]): Unit
+  final private[this] val shuttingDown = new AtomicBoolean(false)
+  final def isShuttingDown: Boolean = shuttingDown.get
 
-  def close(closed: Promise[Closed]): Future[Closed]
-  def stop(closed: Promise[Closed]): Unit
-
-  def intercept(event: Event): Event
-  def sink(event: Event): Unit
-  def commit(): Unit
-
-  def startup(): Unit
-  def mainCycle(): Unit
-  def shutdown(): Unit
-}
-
-trait SourceSemantics extends Logging { this: Source =>
-  def actorName: String = s"actor.source.${getName}"
-
-  def open(ready: Promise[Ready]): Future[Ready] = {
-    logger.debug("source <{}> receiving open statement <{}@{}>", getName, ready, ready.hashCode.toHexString)
-    ref ! Open(ready)
-    ready.future
+  def bootstrap()(implicit system: ActorSystem): Unit = {
+    if ((isActive && isPassive) || (!isActive && !isPassive)) {
+      throw new IllegalStateException(
+        s"source <${getName}> can not be both active and passive or " +
+        s"either active nor passive, you may use a source component " +
+        s"with wrong implementation")
+    }
+    ref = system.actorOf(SourceActor.props().withDispatcher(getDispatcher),
+                         actorName)
   }
 
-  def close(closed: Promise[Closed]): Future[Closed] = {
-    logger.debug("source <{}> receiving close statement <{}@{}>", getName, closed, closed.hashCode.toHexString)
-    ref ! Close(closed)
-    closed.future
+  def open(ready: Promise[Ready]): Unit = {
+    startup()
+    metricsComponentStartTimestampGauge.update(System.currentTimeMillis)
+    ready.success(Ready(getName))
   }
 
-  def intercept(event: Event): Event = {
+  def close(closed: Promise[Closed]): Unit = {
+    shutdown()
+    closed.success(Closed(getName))
+  }
+
+  final def signal(sig: Int): Unit = {
+    logger.debug("source <{}> triggering signal <{}>", getName, sig)
+    ref ! Signal(sig)
+  }
+
+  final def intercept(event: Event): Event =
     getInterceptors.foldLeft(event)((interceptedEvent, interceptor) => {
       interceptedEvent match {
-        case Empty =>
-          Empty
-
+        case Empty => Empty
         case event: Event =>
           try {
             interceptor.intercept(event) match {
-              case Empty =>
-                InterceptorMetrics.eventDiscardedCount.increment()
-                Empty
+              case Empty => Empty
               case e: Event => e
             }
           } catch {
             case exc: Throwable =>
               logger.error(
                 s"got unexpected exception inside interceptor " +
-                s"<${interceptor.getName}>, with event <${event.getBody}>", exc)
-              InterceptorMetrics.eventInterceptFailedCount.increment()
+                s"<${interceptor.getName}> while try to intercept event " +
+                s"body <${event.getBody}> return origin event", exc)
+              metricsSourceEventInterceptErrorCounter.increment()
+              metricsSourceComponentEventInterceptErrorCounter.increment()
+
               event
           }
       }
-    })
-  }
+    }) match {
+      case Empty =>
+        metricsSourceEventInterceptDiscardCounter.increment()
+        metricsSourceComponentEventInterceptDiscardCounter.increment()
+        Empty
+      case event: Event => event
+    }
 
-  import Source.SinkSelectStrategies
-  val transactions = HashSet[Sink]()
-  def sink(event: Event): Unit = {
-    val pipe = {
-      if (getSinks.length == 1 &&
-        getSinkSelectStrategy == SinkSelectStrategies.SELECT_STRATEGY_SKIP_ACCEPT_CHECK_ON_SINGLE) {
-        logger.debug("only one sink connected and <skip-accept-check-on-single> set, bypass accept check for sink")
-        Some(getSinks.head)
-      } else {
-        getSinks.find(_.accept(event))
+  import Source.SinkSelectStrategies._
+  import Source.Acknowledge
+  final private[this] val transactions = mutable.Set[Sink]()
+  final def sink(event: Event): Unit = {
+    if (getSinks.length == 1 &&
+        getSinkSelectStrategy == SKIP_ACCEPT_CHECK_ON_SINGLE) {
+      logger.debug("only one sink connected and " +
+                   "<skip-accept-check-on-single> set, " +
+                   "bypass accept check for sink")
+      Some(getSinks.head)
+    } else {
+      getSinks.find(_.accept(event))
+    }
+  } match {
+    case None =>
+      metricsSourceEventSubmitDiscardCounter.increment()
+      metricsSourceComponentEventSubmitDiscardCounter.increment()
+      logger.warn("no sink can consume event <{}>, ignore and discard " +
+                  "event, configure a <devnull> sink for avoid this " +
+                  "warning, if that discard behavior is what you want",
+                  event.getBody)
+    case Some(sk) =>
+      if (transactions.add(sk)) {
+        logger.debug("append sink <{}> to transactions set <{}>", sk.getName,
+                     transactions.foldLeft(List[String]())((ss, s) => {
+                                   s.getName :: ss
+                                 }).mkString(","))
       }
-    }
-
-    pipe match {
-      case None =>
-        logger.warn("no sink can consume event <{}>, ignore and discard this event", event.getBody)
-      case Some(sk) =>
-        if (transactions.add(sk)) {
-          logger.debug(
-            "append sink <{}> to transactions set <{}>",
-            sk.getName,
-            transactions.foldLeft(List[String]())((ss, s) => { s.getName :: ss }).mkString(","))
-        }
-        sk.submit(event)
-    }
+      sk.submit(event)
   }
 
-  def commit(): Unit = {
+  /**
+   * Current Not Used, we never send <Batch> from souce to sink.
+   * def sink(events: List[Event]): Unit = {
+   *   if (getSinks.length == 1 &&
+   *       getSinkSelectStrategy == SKIP_ACCEPT_CHECK_ON_SINGLE) {
+   *     logger.debug("only one sink connected and " +
+   *                  "<skip-accept-check-on-single> set, " +
+   *                  "bypass accept check for sink")
+   *     Map(getSinks.head -> events)
+   *   } else {
+   *     events.foldLeft(mutable.Map[Sink, mutable.ArrayBuffer[Event]]())(
+   *       (m, e) => {
+   *         getSinks.find(_.accept(e)) match {
+   *           case None =>
+   *             metricsSourceSubmitDiscardCounter.increment()
+   *             metricsSourceComponentSubmitDiscardCounter.increment()
+   *             logger.warn("no sink can consume event <{}>, " +
+   *                         "ignore and discard event", e.getBody)
+   *             m
+   *           case Some(sk) =>
+   *             m.getOrElseUpdate(sk, mutable.ArrayBuffer[Event]()).append(e)
+   *             m
+   *         }
+   *       })
+   *       .map({
+   *         case (sk, buf) => (sk -> buf.toList)
+   *       }).toMap
+   *   }
+   * }.foreach({
+   *   case (sk, es) =>
+   *     if (transactions.add(sk)) {
+   *       logger.debug("append sink <{}> to transactions set <{}>", sk.getName,
+   *                    transactions.iterator().asScala
+   *                                .foldLeft(List[String]())((ss, s) => {
+   *                                  s.getName :: ss
+   *                                }).mkString(","))
+   *     }
+   *     sk.submit(es)
+   * })
+   */
+
+  final def commit(): Acknowledge = Try {
     logger.debug(
-      "source <{}> trying to commit sink transactions <{}>",
-      getName,
-      transactions.foldLeft(List[String]())((ss, s) => { s.getName :: ss }).mkString(","))
+      "source <{}> trying to commit sink transactions <{}>", getName,
+      transactions.foldLeft(List[String]())((ss, s) => { s.getName :: ss })
+                  .mkString(","))
 
-    transactions.foldLeft(List[(Sink, Future[Transaction])]())((trans, s) => {
-      (s -> s.commit(Promise[Transaction]())) :: trans
-    }).foreach({ case (sk, tx) =>
-      Await.ready(tx, Duration.Inf).value.get match {
-        case Success(Transaction(owner)) =>
-          logger.debug("downstream sink <{}> commit successed", owner)
-
-        case Failure(exc) =>
-          logger.error(s"downstream sink <${sk.getName}> transaction commit failed, " +
-            "which means you may use a sink with wrong semantics implementation",
-            exc)
-      }
-    })
+    val acks =
+      transactions
+        .foldLeft(List[(Sink, Future[Transaction])]())((trans, s) => {
+          (s -> s.commit(getName, Promise[Transaction]())) :: trans
+        })
+        .foldLeft(List[(String, Try[Transaction])]())({
+          case (_acks, (sk, tx)) =>
+            val txAck = Await.ready(tx, Duration.Inf).value.get
+            txAck match {
+              case tran @ Success(Transaction(owner)) =>
+                logger.debug("downstream sink <{}> acknowledged " +
+                             "commit transaction", owner)
+                (owner -> tran) :: _acks
+              case failed @ Failure(exc) =>
+                logger.error(s"downstream sink <${sk.getName}> transaction " +
+                             s"commit failed", exc)
+                (sk.getName -> failed) :: _acks
+            }
+        })
     transactions.clear()
-  }
 
-  def start(ready: Promise[Ready]): Unit = {
-    startup()
-    ready.success(Ready(getName))
-    scheduleNextCycle()
-  }
-
-  def stop(closed: Promise[Closed]): Unit = {
-    shutdown()
-    closed.success(Closed(getName))
-  }
-
-  def bootstrap()(implicit system: ActorSystem): Source = {
-    ref = system.actorOf(SourceActor.props().withDispatcher(getDispatcher), actorName)
-    this
-  }
-}
-
-
-abstract class AtieshSource(
-  name: String,
-  dispatcher: String,
-  cfg: Configuration,
-  interceptors: List[Interceptor],
-  sinks: List[Sink],
-  strategy: String) extends Source with SourceSemantics {
-
-  def getName: String = name
-  def getDispatcher: String = dispatcher
-  def getConfiguration: Configuration = cfg
-  def getInterceptors: List[Interceptor] = interceptors
-  def getSinks: List[Sink] = sinks
-  def getSinkSelectStrategy: String = strategy
-}
-
-object Source extends Logging {
-  object SinkSelectStrategies {
-    val SELECT_STRATEGY_FIRST_ACCEPTED = "first-accepted"
-    val SELECT_STRATEGY_SKIP_ACCEPT_CHECK_ON_SINGLE = "skip-accept-check-on-single"
-
-    val DEFAULT_SELECT_STRATEGY = SELECT_STRATEGY_SKIP_ACCEPT_CHECK_ON_SINGLE
-
-    def isValidStrategy(strategy: String): Boolean = {
-      strategy == SELECT_STRATEGY_SKIP_ACCEPT_CHECK_ON_SINGLE ||
-        strategy == SELECT_STRATEGY_FIRST_ACCEPTED
+    val (successes, failures) = acks.partition(_._2.isSuccess)
+    if (failures.length != 0) {
+      throw new SourceCommitFailedException(
+        s"source <${getName}> commit failed",
+        failures.foldLeft(List[(String, Throwable)]())({
+          case (excs, (owner, Failure(exc))) => (owner -> exc) :: excs
+        }))
+    } else {
+        successes.foldLeft(List[Transaction]())({
+          case (trans, (_, tran)) => tran.get :: trans
+        })
     }
   }
 
-  object ComponentOpts {
-    val OPT_SOURCE_CLSNAME = "type"
-    val OPT_INTERCEPTORS = "interceptors"
-    val DEF_INTERCEPTORS = List[String]()
-    val OPT_SINKS = "sinks"
-    val DEF_SINKS = List[String]()
-    val OPT_SINK_SELECT_STRATEGY = "sink-select-strategy"
-    val DEF_SINK_SELECT_STRATEGY = SinkSelectStrategies.DEFAULT_SELECT_STRATEGY
-    val OPT_AKKA_DISPATCHER = "akka-dispatcher"
-    val DEF_AKKA_DISPATCHER = "akka.actor.default-blocking-io-dispatcher"
-  }
-  def getComponentName: String = "sources"
+  final def sourceCycle(events: List[Event]): Unit = {
+    events.foreach(e => {
+      metricsSourceEventAcceptedCounter.increment()
+      metricsSourceComponentEventAcceptedCounter.increment()
 
-  def initializeComponents(
-    scf: Configuration,
-    interceptors: List[Interceptor],
-    sinks: List[Sink])(implicit system: ActorSystem): Try[List[Source]] = {
-
-    val scfs = scf.getSections()
-      .foldLeft(List[(String, Configuration)]())((cfgs, sn) => {
-        scf.getSection(sn).map(sc => {
-          logger.debug(
-            "readed configuration section <{}> with content <{}> for initialize source(s)", sn, sc)
-          (sn -> sc) :: cfgs
-        }).getOrElse(cfgs)
-      })
-
-    val comps = scfs.foldLeft(List[Try[Source]]())({ case (comps, (name, cfg)) =>
-      val activeInterceptors = cfg.getStringList(ComponentOpts.OPT_INTERCEPTORS, ComponentOpts.DEF_INTERCEPTORS)
-        .foldLeft(List[Interceptor]())((used, interceptorName) => {
-          interceptors.find(_.getName == interceptorName) match {
-            case Some(i) =>
-              i :: used
-            case None =>
-              logger.warn(
-                "configurated interceptor <{}> not found during source <{}> initialize, ignore",
-                interceptorName,
-                name)
-              used
-          }
-        }).sortBy(-_.getPriority)
-
-      val activeSinks = cfg.getStringList(ComponentOpts.OPT_SINKS, ComponentOpts.DEF_SINKS)
-        .foldLeft(List[Sink]())((used, sinkName) => {
-          sinks.find(_.getName == sinkName) match {
-            case Some(s) =>
-              s :: used
-            case None =>
-              logger.warn(
-                "configurated sink <{}> not found during source <{}> initialize, ignore",
-                sinkName,
-                name)
-              used
-          }
-        }).reverse // make sure the sinks ordered as same as they configured inside the configuration file
-
-      val sinkSelectStrategy = {
-        val strategy = cfg.getString(ComponentOpts.OPT_SINK_SELECT_STRATEGY, ComponentOpts.DEF_SINK_SELECT_STRATEGY)
-        if (!SinkSelectStrategies.isValidStrategy(strategy)) {
-          logger.warn(
-            "configurated sink select strategy <{}> not valid during source <{}> initialize, ignore",
-            strategy,
-            name)
-          SinkSelectStrategies.DEFAULT_SELECT_STRATEGY
-        } else {
-          strategy
-        }
-      }
-
-      initializeComponent(name, cfg, activeInterceptors, activeSinks, sinkSelectStrategy) :: comps
-    })
-
-    comps.foldLeft(Try(List[Source]()))((sources, source) => {
-      sources.flatMap(ss => {
-        source match {
-          case Success(s) => Success(s :: ss)
-          case Failure(exc) => Failure(exc)
-        }
-      })
-    })
-  }
-
-  def initializeComponent(
-    name: String,
-    scf: Configuration,
-    interceptors: List[Interceptor],
-    sinks: List[Sink],
-    strategy: String)(implicit system: ActorSystem): Try[Source] = Try {
-
-    val className = scf.getString(ComponentOpts.OPT_SOURCE_CLSNAME)
-    val dispatcher = scf.getString(ComponentOpts.OPT_AKKA_DISPATCHER, ComponentOpts.DEF_AKKA_DISPATCHER)
-
-    logger.debug("loading source {} (class: {}) with configuration: {}", name, className, scf)
-    val source = ClassLoader.loadClassInstanceByName[Source](
-      className, List[(AnyRef, Class[_])](
-        (name, classOf[String]),
-        (dispatcher, classOf[String]),
-        (scf, classOf[Configuration]),
-        (interceptors, classOf[List[Interceptor]]),
-        (sinks, classOf[List[Sink]]),
-        (strategy, classOf[String])
-      )).bootstrap()
-    logger.info("loaded source {} (class: {}) with configuration: {}", source.getName, className, source.getConfiguration)
-
-    source
-  }
-
-  def shutdownComponents(sources: List[Source]): Unit = {
-    sources.map(source => {
-      val p = Promise[Closed]()
-      logger.info("shutting down source component, shutting down <{}>", source.getName)
-      (source -> source.close(p))
-    }).foreach({ case (source, closedFuture) =>
-      Await.ready(closedFuture, Duration.Inf).value.get match {
-        case Success(closed) =>
-          logger.info("atiesh source <{}> closed", closed.component)
-        case Failure(exc) =>
-          logger.info("atiesh source <{}> close failed", source.getName)
+      intercept(e) match {
+        case Empty =>
+          logger.debug("event <{}> discarded by interceptor", e.getBody)
+        case intercepted: Event =>
+          sink(intercepted)
       }
     })
   }
+
+  def process(sig: Int): Unit =
+    logger.debug("source <{}> handling signal <{}>", getName, sig)
+
+  /**
+   * Atiesh source component api.
+   */
+  def getInterceptors: List[Interceptor]
+  def getSinks: List[Sink]
+  def getSinkSelectStrategy: String
+
+  /**
+   * Atiesh active source api.
+   */
+  final def scheduleNextCycle(): Unit = ref ! Continue
+  def mainCycle(): List[Event]
+
+  /**
+   * Atiesh passive source api.
+   */
+  final def scheduleNextCycle(events: List[Event]): Future[Confirmation] = {
+    val confirm = Promise[Confirmation]()
+    ref ! Offer(events, confirm)
+    confirm.future
+  }
+
+  /**
+   * Atiesh active & passive source flags.
+   */
+  def isActive: Boolean
+  def isPassive: Boolean
+
+  /**
+   * Atiesh active & passive source post cycle hook.
+   */
+  def doneCycle(ack: Acknowledge): Unit = ()
+}
+
+trait ActiveSourceSemantics { this: SourceSemantics =>
+  final def isActive: Boolean = true
+  final def isPassive: Boolean = false
+}
+
+trait PassiveSourceSemantics { this: SourceSemantics =>
+  final def isActive: Boolean = false
+  final def isPassive: Boolean = true
+
+  /**
+   * Passive source doesn't invoke this method, provide
+   * this default one fulfill the source semantics api.
+   */
+  final def mainCycle(): List[Event] = List[Event]()
+}
+
+/**
+ * Atiesh source component.
+ */
+trait Source
+  extends ExtendedComponent
+  with SourceType
+  with SourceMetrics
+  with SourceSemantics {
+  final protected[this] var sec: ExecutionContext = _
+
+  override def bootstrap()(implicit system: ActorSystem): Unit = {
+    super.bootstrap()
+    sec = system.dispatchers.lookup(getDispatcher)
+  }
+
+  def start(ready: Promise[Ready]): Future[Ready] = {
+    logger.debug("source <{}> triggering ready statement <{}@{}>",
+                 getName, ready, ready.hashCode.toHexString)
+    ref ! Open(ready)
+    ready.future
+  }
+
+  def stop(closed: Promise[Closed]): Future[Closed] = {
+    logger.debug("source <{}> triggering closed statement <{}@{}>",
+                 getName, closed, closed.hashCode.toHexString)
+    ref ! Close(closed)
+    closed.future
+  }
+}
+
+/**
+ * Atiesh source component with constructor.
+ */
+abstract class AtieshSource(name: String,
+                            dispatcher: String,
+                            cfg: Configuration,
+                            interceptors: List[Interceptor],
+                            sinks: List[Sink],
+                            strategy: String)
+  extends Source {
+  final def getName: String = name
+  final def getDispatcher: String = dispatcher
+  final def getConfiguration: Configuration = cfg
+  final def getExecutionContext: ExecutionContext = sec
+  final def getInterceptors: List[Interceptor] = interceptors
+  final def getSinks: List[Sink] = sinks
+  final def getSinkSelectStrategy: String = strategy
 }

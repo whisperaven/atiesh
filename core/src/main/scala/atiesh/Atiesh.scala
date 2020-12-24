@@ -1,4 +1,4 @@
-/*
+/**
  * Copyright (C) Hao Feng
  */
 
@@ -12,6 +12,9 @@ import scala.util.{ Success, Failure }
 import atiesh.server.AtieshServer
 import atiesh.utils.{ ConfigParser, Configuration, Logging }
 
+/**
+ * Atiesh Main.
+ */
 object Atiesh extends Logging {
   def main(args: Array[String]): Unit = {
     if (args.length < 1) {
@@ -27,25 +30,24 @@ object Atiesh extends Logging {
       sys.exit(1)
     }
 
-    /* open & read configuration file */
-    val cfg: Configuration = ConfigParser.parseConfigFile(new File(args(0))) match {
-      case Success(c) => c
-      case Failure(exc) =>
-        logger.error("got unexpected error during configuration file parse, exit", exc)
-        sys.exit(2)
-    }
+    val cfg: Configuration =
+      ConfigParser.parseConfigFile(new File(args(0))) match {
+        case Success(c) => c
+        case Failure(exc) =>
+          logger.error("got unexpected error during configuration " +
+                       "file parse, exit", exc)
+          sys.exit(2)
+      }
 
-    /* initialize & startup & block server */
     try {
-      val server = AtieshServer(cfg)
+      val server = new AtieshServer(cfg)
+      val sdhook = sys.addShutdownHook(server.disassemble)
 
-      sys.addShutdownHook(server.shutdown)
-
-      server.startup()
+      server.assemble()
       server.awaitShutdown()
     } catch {
       case exc: Throwable =>
-        logger.error("Exiting atiesh due to unexpected fatal exception", exc)
+        logger.error("exiting atiesh due to unexpected fatal exception", exc)
         sys.exit(1)
     }
     sys.exit(0)

@@ -4,6 +4,19 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.4.0] - 2020-12-25 (Merry Christmas)
+- add new semantics for http source
+- add new simple components for http source/sink
+- add new semantics for filesystem source
+- add new simple component for filesystem source
+- add new semantics for kafka sink
+- add new simple component for kafka sink
+- redesign components and semantics api
+- redesign components and server initialize
+- redesign utils for http request/response
+- update Kamon/Akka-Http modules version
+- bug fix for concurrent/startup/shutdown issues
+
 ## [2.1.0] - 2019-04-10
 - add commit to trait Sink
 - add start & stop to trait Sink\* and trait Source\*
