@@ -233,7 +233,7 @@ trait DirectoryWatchSourceSemantics
               }
             } else Some(line)
           }
-          body.map(payloda => { buffer.append(SimpleEvent(payloda, headers)) })
+          body.map(payload => { buffer.append(SimpleEvent(payload, headers)) })
           reads += 1
         }
 
