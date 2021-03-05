@@ -12,7 +12,7 @@ import java.nio.file.{ Path, Paths, Files, FileSystems,
 import java.util.concurrent.TimeUnit
 // scala
 import scala.collection.{ mutable, Iterator }
-import scala.io.{ Codec, BufferedSource }
+import scala.io.{ Codec, Source => IOSource }
 import scala.util.{ Try, Success, Failure }
 import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Promise }
@@ -32,6 +32,10 @@ object DirectoryWatchSourceSemantics {
 
     val OPT_CYCLE_MAX_LINES = "cycle-max-lines"
     val DEF_CYCLE_MAX_LINES = 1500
+    val OPT_MAX_LINE_LENGTH = "max-line-length"
+    val DEF_MAX_LINE_LENGTH = 512 * 1024 /* 2 bytes pre char, total 1M */
+    val OPT_MAX_LINE_LENGTH_TRUNCATE = "max-line-truncate"
+    val DEF_MAX_LINE_LENGTH_TRUNCATE = false  /* true for truncate, not drop */
 
     val OPT_FILE_CHARSET = "file-charset"
     val DEF_FILE_CHARSET = StandardCharsets.UTF_8.name()
@@ -50,7 +54,7 @@ object DirectoryWatchSourceSemantics {
   val emptyHeaders = Map[String, String]()
 
   case class InputLines(path: String,
-                        stream: BufferedSource,
+                        stream: IOSource,
                         lines: Iterator[String],
                         offset: Int)
 }
@@ -72,6 +76,8 @@ trait DirectoryWatchSourceSemantics
 
   final private[this] var directoryWatchPollTimeout: FiniteDuration = _
   final private[this] var directoryWatchMaxLines: Long = 0
+  final private[this] var directoryWatchMaxLineLength: Int = 0
+  final private[this] var directoryWatchMaxLineLengthTruncate: Boolean = _
   final private[this] var directoryWatchFileCharsetName: String = _
   final private[this] var directoryWatchFileCodec: Codec = _
   final private[this] var directoryWatchEnableFileHeaders: Boolean = _
@@ -119,8 +125,7 @@ trait DirectoryWatchSourceSemantics
       metricsDirectoryWatchSourceComponentInQueueItemsGauge.decrement()
 
       try {
-        val stream = scala.io.Source.fromFile(path.toString)(
-                                              directoryWatchFileCodec)
+        val stream = IOSource.fromFile(path.toString)(directoryWatchFileCodec)
         val lines = stream.getLines().drop(offset)
 
         metricsDirectoryWatchSourceOpenFilesCounter.increment()
@@ -206,7 +211,29 @@ trait DirectoryWatchSourceSemantics
             Map[String, String]((DWHeaders.FILENAME -> path),
                                 (DWHeaders.OFFSET -> (offset + reads).toString))
           } else emptyHeaders
-          buffer.append(SimpleEvent(lines.next, headers))
+          val body = {
+            val line = lines.next
+            if (line.length > directoryWatchMaxLineLength) {
+              if (directoryWatchMaxLineLengthTruncate) {
+                logger.warn("source <{}> got line with very long content, " +
+                            "length <{}> @ offset <{}> and content <{}>, " +
+                            "truncate to <{}> length", getName, line.length,
+                            offset + reads, line, directoryWatchMaxLineLength)
+                Some(line.slice(0, directoryWatchMaxLineLength))
+              } else {
+                logger.warn("source <{}> got line with very long content, " +
+                            "length <{}> @ offset <{}> and content <{}>, " +
+                            "drop and skip to next (if this is not what you " +
+                            "excepted, you can either increment <{}> or set " +
+                            "<{}> to <true> to truncate it instead of drop it)",
+                            getName, line.length, offset + reads, line,
+                            Opts.OPT_MAX_LINE_LENGTH,
+                            Opts.OPT_MAX_LINE_LENGTH_TRUNCATE)
+                None
+              }
+            } else Some(line)
+          }
+          body.map(payload => { buffer.append(SimpleEvent(payload, headers)) })
           reads += 1
         }
 
@@ -275,6 +302,12 @@ trait DirectoryWatchSourceSemantics
 
     directoryWatchMaxLines = cfg.getLong(Opts.OPT_CYCLE_MAX_LINES,
                                          Opts.DEF_CYCLE_MAX_LINES)
+    directoryWatchMaxLineLength = cfg.getInt(Opts.OPT_MAX_LINE_LENGTH,
+                                             Opts.DEF_MAX_LINE_LENGTH)
+    directoryWatchMaxLineLengthTruncate =
+      cfg.getBoolean(Opts.OPT_MAX_LINE_LENGTH_TRUNCATE,
+                     Opts.DEF_MAX_LINE_LENGTH_TRUNCATE)
+
     directoryWatchPollTimeout = cfg.getDuration(Opts.OPT_WATCH_POLL_TIMEOUT,
                                                 Opts.DEF_WATCH_POLL_TIMEOUT)
     directoryWatchFileCharsetName = cfg.getString(Opts.OPT_FILE_CHARSET,

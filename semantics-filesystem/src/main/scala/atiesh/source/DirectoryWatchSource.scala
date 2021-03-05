@@ -22,7 +22,7 @@ class DirectoryWatchSource(name: String,
   with DirectoryWatchSourceSemantics 
   with Logging {
 
-  def skipFile(path: Path): Boolean = true
+  def skipFile(path: Path): Boolean = false
 
   def doneFile(path: Path): Unit = logger.debug("directory watch source " +
                                                 "<{}> handle EOF for file: " +

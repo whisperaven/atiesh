@@ -4,6 +4,9 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.4.0] - Not Release Yet
+- add new config for directory watch source for handle large line
+
 ## [2.4.0] - 2020-12-25 (Merry Christmas)
 - add new semantics for http source
 - add new simple components for http source/sink
