@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [2.4.0] - Not Release Yet
 - add new config for directory watch source for handle large line
+- fix http pool bufferoverflow
+- fix http pool shutdown block forever
+- update akka deps
 
 ## [2.4.0] - 2020-12-25 (Merry Christmas)
 - add new semantics for http source
