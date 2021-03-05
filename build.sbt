@@ -33,7 +33,7 @@ lazy val distribution = Project(
 /* atiesh core project */
 lazy val dependencies = Seq(
     // akka-actor
-    "com.typesafe.akka"          %% "akka-actor"           % "2.5.26",
+    "com.typesafe.akka"          %% "akka-actor"           % "2.5.32",
     // typesafe config
     "com.typesafe"               %  "config"               % "1.3.3",
     // kamon
@@ -63,8 +63,8 @@ lazy val httputils = (project in file("utils/http"))
     common,
     name := "atiesh-utils-http",
     libraryDependencies ++= Seq(
-      "com.typesafe.akka" %% "akka-stream" % "2.5.26",
-      "com.typesafe.akka" %% "akka-http" % "10.1.10",
+      "com.typesafe.akka" %% "akka-stream" % "2.5.32",
+      "com.typesafe.akka" %% "akka-http" % "10.1.13",
     )
   ).dependsOn(core)
 
