@@ -17,6 +17,7 @@ import akka.stream.{ ActorMaterializer, Materializer }
 import akka.stream.{ OverflowStrategy, QueueOfferResult }
 import akka.stream.scaladsl.{ Sink => AkkaSink, _ }
 import akka.http.scaladsl.Http
+import akka.http.scaladsl.settings.ConnectionPoolSettings
 import akka.http.scaladsl.model.{ HttpRequest => AkkaHttpRequest,
                                   HttpResponse => AkkaHttpResponse, _ }
 import akka.util.ByteString
@@ -31,10 +32,17 @@ object HttpSinkSemantics {
     val OPT_REMOTE_URL = "remote-url"
     val OPT_REQUEUE_SIZE = "request-queue-size"
     val DEF_REQUEUE_SIZE = 128
+    /* the maximum connections is depends on the value
+     * of <host-connection-pool.max-connections> */
+    val OPT_MAX_CONNECTIONS = "max-connections"
+    val DEF_MAX_CONNECTIONS = 32
     val OPT_REQUEST_WITHOUT_SIZE_LIMITE = "request-without-size-limit"
     val DEF_REQUEST_WITHOUT_SIZE_LIMITE = true
     val OPT_RESPONSE_WITHOUT_SIZE_LIMITE = "response-without-size-limit"
     val DEF_RESPONSE_WITHOUT_SIZE_LIMITE = true
+    /* check out the close method for more detail of this setting */
+    val OPT_POOL_WITHOUT_IDLE_TIMEOUT = "pool-without-idle-timeout"
+    val DEF_POOL_WITHOUT_IDLE_TIMEOUT = true
     val OPT_AKKA_DISPATCHER = "http-akka-dispatcher"
     val DEF_AKKA_DISPATCHER = "akka.actor.default-dispatcher"
   }
@@ -60,12 +68,12 @@ trait HttpSinkSemantics
   final private[this] var httpWithoutResponseSizeLimit: Boolean = _
 
   type HttpReqQueue =
-    SourceQueueWithComplete[(AkkaHttpRequest, Promise[AkkaHttpResponse])]
+    SourceQueueWithComplete[(AkkaHttpRequest, Promise[HttpResponse])]
   final private[this] var httpRequestQueue: HttpReqQueue = _
 
   type HttpProcessorFlow =
-    Flow[(AkkaHttpRequest, Promise[AkkaHttpResponse]),
-         (Try[AkkaHttpResponse], Promise[AkkaHttpResponse]),
+    Flow[(AkkaHttpRequest, Promise[HttpResponse]),
+         (Try[AkkaHttpResponse], Promise[HttpResponse]),
          Http.HostConnectionPool]
   final private[this] var httpProcessorFlow: HttpProcessorFlow = _
   final private[this] var httpConnectionPool: HostConnectionPool = _
@@ -87,6 +95,11 @@ trait HttpSinkSemantics
                         } else remoteURL.getPort
                       }
     val queueSize = cfg.getInt(Opts.OPT_REQUEUE_SIZE, Opts.DEF_REQUEUE_SIZE)
+    val httpMaxConnections = cfg.getInt(Opts.OPT_MAX_CONNECTIONS,
+                                        Opts.DEF_MAX_CONNECTIONS)
+    val httpPoolWitioutIdleTimeout =
+      cfg.getBoolean(Opts.OPT_POOL_WITHOUT_IDLE_TIMEOUT,
+                     Opts.DEF_POOL_WITHOUT_IDLE_TIMEOUT)
 
     httpDispatcher = cfg.getString(Opts.OPT_AKKA_DISPATCHER,
                                    Opts.DEF_AKKA_DISPATCHER)
@@ -100,27 +113,63 @@ trait HttpSinkSemantics
       cfg.getBoolean(Opts.OPT_RESPONSE_WITHOUT_SIZE_LIMITE,
                      Opts.DEF_RESPONSE_WITHOUT_SIZE_LIMITE)
 
+    /*
+     * prevent automatic pool shutdown, which may cause this layer
+     * block forever on close, see close method for more detail
+     */
+    val httpPoolSettings = {
+      val s = ConnectionPoolSettings(system)
+      if (httpPoolWitioutIdleTimeout) {
+        s.withIdleTimeout(Duration.Inf)
+      } else s
+    }
     httpMaterializer = ActorMaterializer()
     httpProcessorFlow = {
       if (remoteProto == "https") {
-        Http().newHostConnectionPoolHttps[Promise[AkkaHttpResponse]](
-          remoteHost, remotePort)(httpMaterializer)
+        Http().newHostConnectionPoolHttps[Promise[HttpResponse]](
+          remoteHost, remotePort, settings = httpPoolSettings)(httpMaterializer)
       } else {
-        Http().newHostConnectionPool[Promise[AkkaHttpResponse]](
-          remoteHost, remotePort)(httpMaterializer)
+        Http().newHostConnectionPool[Promise[HttpResponse]](
+          remoteHost, remotePort, settings = httpPoolSettings)(httpMaterializer)
       }
     }
     val (queue, pool) =
-      Source.queue[(AkkaHttpRequest, Promise[AkkaHttpResponse])](
+      Source.queue[(AkkaHttpRequest, Promise[HttpResponse])](
         queueSize, OverflowStrategy.backpressure)
         /* send request to remote host */
         .viaMat(httpProcessorFlow)(Keep.both)
-        /* the result is Try[AkkaHttpResponse] */
-        .to(AkkaSink.foreach({
-          case ((Success(response), p)) =>
-            p.success(response)
-          case ((Failure(exc), p))      =>
+        /*
+         * the return value of processor flow is Try[AkkaHttpResponse] and we
+         * need consume the response body (HttpEntity) inside the stream
+         * context to prevent the new request walk into that flow before the old
+         * one still hold the connection slot.
+         *
+         * by consume the http response entity inside the stream, we can free
+         * the connection slot of the processor flow before the new request
+         * require one.
+         *
+         * by doing this, the buffer of processor flow will never overflowed.
+         */
+        .to(AkkaSink.foreachAsync(httpMaxConnections)({
+          case ((Success(akkaResponse), p)) =>
+            val status = akkaResponse.status.intValue
+            val headers = HttpMessage.parseHeaders(akkaResponse)
+
+            val bodyStream = {
+             if (httpWithoutResponseSizeLimit) {
+                akkaResponse.entity.withoutSizeLimit().dataBytes
+              } else akkaResponse.entity.dataBytes
+            }
+            bodyStream.runFold(ByteString.empty)({ /* read response body */
+                case (acc, b) => { acc ++ b }
+              })(httpMaterializer)
+              .flatMap(content => {
+                p.success(HttpResponse(status, headers, content))
+                Future.successful(())
+              })(httpExecutionContext)
+          case ((Failure(exc), p)) =>
             p.failure(exc)
+            Future.successful(())
         }))
         /* start the stream & get MaterializedValue */
         .run()(httpMaterializer)
@@ -180,7 +229,7 @@ trait HttpSinkSemantics
    * which is thread safe.
    */
   final def httpRequest(req: HttpRequest): Future[HttpResponse] = {
-    val p = Promise[AkkaHttpResponse]()
+    val p = Promise[HttpResponse]()
     val r = AkkaHttpRequest(req.akkaHttpMethod,
                             req.akkaUri,
                             req.akkaHttpHeaders,
@@ -191,28 +240,12 @@ trait HttpSinkSemantics
 
     Await.ready(
       httpRequestQueue.offer((r -> p)), Duration.Inf).value.get match {
-      case Success(QueueOfferResult.Enqueued) =>
-        p.future.flatMap(akkaResponse => {
-          val status = akkaResponse.status.intValue
-          val headers = HttpMessage.parseHeaders(akkaResponse)
-
-          val bodyStream = {
-           if (httpWithoutResponseSizeLimit) {
-              akkaResponse.entity.withoutSizeLimit().dataBytes
-            } else akkaResponse.entity.dataBytes
-          }
-          bodyStream.runFold(ByteString.empty)({ /* read response body */
-              case (acc, b) => { acc ++ b }
-            })(httpMaterializer)
-            .map(content => {
-              HttpResponse(status, headers, content)
-            })(httpExecutionContext)
-        })(httpExecutionContext)
+      case Success(QueueOfferResult.Enqueued) => p.future
 
       case Success(QueueOfferResult.Dropped) =>
         Future.failed(new SinkBufferOverflowedException(
                         s"sink <${getName}> request queue overflowed"))
-      case Success(QueueOfferResult.QueueClosed) =>
+      case Success(QueueOfferResult.QueueClosed)  =>
         Future.failed(new SinkClosedException(
                         s"sink <${getName}> request queue was closed"))
       case Success(QueueOfferResult.Failure(exc)) => Future.failed(exc)
@@ -275,6 +308,14 @@ trait HttpSinkSemantics
         logger.info(s"request queue of HttpSinkSemantics of Sink <" +
                     s"${getName}> killed by exception", exc)
     }
+    /**
+     * the pool will automatic shutdown via the configured idle timeouts, which
+     * is <akka.http.host-connection-pool.idle-timeout>.
+     *
+     * invoke shutdown method on the matvalue of pool flow, when the pool is
+     * already shutdowned via the configured idle timeouts, the returened
+     * future will never fulfilled, here block forever!!!
+     */
     Await.ready(httpConnectionPool.shutdown(), Duration.Inf).value.get match {
       case Success(_) =>
         logger.info("http connection pool of HttpSinkSemantics of Sink <{}> " +
