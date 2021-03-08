@@ -4,7 +4,7 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [2.4.0] - Not Release Yet
+## [2.4.1] - 2021-03-08
 - add new config for directory watch source for handle large line
 - fix http pool bufferoverflow
 - fix http pool shutdown block forever
