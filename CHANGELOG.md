@@ -4,6 +4,11 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.4.2] - 2021-04-25
+- fix KafkaLimitAckSinkSemantics `promise already completed` error
+- add new `openFile` and `getLinesIterator` api to filesystem source semantics
+- add new `IO` utils for simple file IO operations
+
 ## [2.4.1] - 2021-03-08
 - add new config for directory watch source for handle large line
 - fix http pool bufferoverflow
