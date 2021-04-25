@@ -7,6 +7,7 @@ package atiesh.sink
 // java
 import java.util.Properties
 // scala
+import scala.util.{ Try, Success, Failure }
 import scala.concurrent.{ ExecutionContext, Promise, Future }
 import scala.collection.JavaConverters._
 // akka
@@ -108,23 +109,25 @@ trait KafkaSinkSemantics
   final def kafkaSend(event: Event,
                       topic: String,
                       parser: MetadataParser): Future[RecordMetadata] = {
-    val record = parser(event) match {
-      case (None, None, None) =>
-        Some(new ProducerRecord[String, String](topic, event.getBody))
-      case (Some(key), None, None) =>
-        Some(new ProducerRecord[String, String](topic, key, event.getBody))
-      case (Some(key), Some(partation), None) =>
-        Some(new ProducerRecord[String, String](topic, partation,
-                                                key, event.getBody))
-      case (Some(key), Some(partation), Some(timestamp)) =>
-        Some(new ProducerRecord[String, String](topic, partation, timestamp,
-                                                key, event.getBody))
-      case _ =>
-        None
+    val record = Try {
+      parser(event) match {
+        case (None, None, None) =>
+          Some(new ProducerRecord[String, String](topic, event.getBody))
+        case (Some(key), None, None) =>
+          Some(new ProducerRecord[String, String](topic, key, event.getBody))
+        case (Some(key), Some(partation), None) =>
+          Some(new ProducerRecord[String, String](topic, partation,
+                                                  key, event.getBody))
+        case (Some(key), Some(partation), Some(timestamp)) =>
+          Some(new ProducerRecord[String, String](topic, partation, timestamp,
+                                                  key, event.getBody))
+        case _ =>
+          None
+      }
     }
 
     record match {
-      case Some(r) =>
+      case Success(Some(r)) =>
         try {
           val p = Promise[RecordMetadata]()
           kafkaProducer.send(r, createProduceCB(p))
@@ -133,12 +136,16 @@ trait KafkaSinkSemantics
           case exc: Throwable =>
             Future.failed[RecordMetadata](exc)
         }
-      case None =>
+      case Success(_) =>
         Future.failed[RecordMetadata](new SinkInvalidEventException(
           "bad event parser response, cannot create record instance, the " +
           "parser should return a tuple which contains <None, None, None> " +
           "or <key, None, None> or <key, partation, None> " +
           "or <key, partation, timestamp>"))
+      case Failure(exc) =>
+        Future.failed[RecordMetadata](new SinkInvalidEventException(
+          "bad event parser, got unexcepted exception during kafka event " +
+          "parse, cannot create record instance", exc))
     }
   }
 

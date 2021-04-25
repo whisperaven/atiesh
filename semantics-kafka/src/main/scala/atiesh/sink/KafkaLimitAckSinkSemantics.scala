@@ -59,44 +59,52 @@ trait KafkaLimitAckSinkSemantics
                                  isRetry: Boolean): Unit = {
     if (!isRetry) pendingAcks.incrementAndGet()
 
-    kafkaSend(event, topic, parser)
-      .andThen({    /* handle pending-acks update & resume process */
-        case Success(_) =>
-          val pendings = pendingAcks.decrementAndGet()
-          logger.debug("sink <{}> got total <{}> pending acks, check " +
-                       "for process resume after event send successed",
-                       getName, pendings)
-          signal(Sig.SIG_RESUME_PROCESS)
-        case Failure(_) =>
-          if (!cfgMustSend) {
-            val pendings = pendingAcks.decrementAndGet()
-            logger.debug("sink <{}> got total <{}> pending acks, check " +
-                         "for process resume after event send failed",
-                         getName, pendings)
-            signal(Sig.SIG_RESUME_PROCESS)
-          } else {
-            logger.debug("sink <{}> got total <{}> pending acks, retrying " +
-                         "without process resume check after send failed",
-                         getName, pendingAcks.get())
-          }
-      })(getKafkaExecutionContext)
-      .onComplete({ /* handle produce result (for retry) */
+    kafkaSend(event, topic, parser).onComplete({
         case Success(metadata) =>
           logger.debug(
             "sink <{}> produce message <{}> to kafka topic <{}> successed, " +
             "with partition <{}> and timestamp <{}>, kafka offset was <{}>",
             getName, event.getBody, topic,
             metadata.partition, metadata.timestamp, metadata.offset)
-          kafkaResponseHandler(event, topic)(Try(metadata))
+
+          try {
+            kafkaResponseHandler(event, topic)(Try(metadata))
+          } catch {
+            case exc: Throwable =>
+              logger.error(s"sink <${getName}> throw unexcepted exception " +
+                           s"inside user define <kafkaResponseHandler>, " +
+                           s"which means you may use a kafka sink component " +
+                           s"with wrong implementation", exc)
+          }
+
+          logger.debug("sink <{}> got total <{}> pending acks, check " +
+                       "for process resume after event send successed",
+                       getName, pendingAcks.get())
+          signal(Sig.SIG_RESUME_PROCESS)
         case Failure(exc) =>
-          if (cfgMustSend) {
-            logger.warn(s"sink <${getName}> produce message " +
-                         s"<${event.getBody}> to kafka topic " +
-                         s"<${topic}> failed, retring", exc)
-            kafkaProduce(event, topic, parser, true)
-          } else
+          try {
+            /*
+             * let the user known what happened when something goes wrong, but
+             * they cant interfere, it's depends on <cfgMustSend> only
+             */
             kafkaResponseHandler(event,
                                  topic)(Try[RecordMetadata]({ throw exc }))
+          } catch {
+            case exc: Throwable =>
+              logger.error(s"sink <${getName}> throw unexcepted exception " +
+                           s"inside user define <kafkaResponseHandler>, " +
+                           s"which means you may use a kafka sink component " +
+                           s"with wrong implementation", exc)
+          }
+
+          if (cfgMustSend) {
+            kafkaProduce(event, topic, parser, true)
+          } else {
+            logger.debug("sink <{}> got total <{}> pending acks, check " +
+                         "for process resume after event send failed",
+                         getName, pendingAcks.get())
+            signal(Sig.SIG_RESUME_PROCESS)
+          }
       })(getKafkaExecutionContext)
   }
 
@@ -147,19 +155,21 @@ trait KafkaLimitAckSinkSemantics
        * handle resume signal
        */
       case Sig.SIG_RESUME_PROCESS =>
-        if (!transactions.isEmpty && pendingAcks.get() < cfgMaxPendingAcks) {
+        val pendings = pendingAcks.decrementAndGet()
+
+        if (!transactions.isEmpty && pendings < cfgMaxPendingAcks) {
           transactions.iterator().asScala
             .foreach({
               case (committer, tran) =>
                 logger.debug("sink <{}> acknowledge delayed commit from <{}>" +
                              "transaction(s), current <{}> pending acks",
-                             getName, committer, pendingAcks.get())
+                             getName, committer, pendings)
                 ack(committer, tran)
             })
           transactions.clear()
         }
 
-        if (pendingAcks.get() == 0) closing.map(closed => close(closed))
+        if (pendings == 0) closing.map(closed => close(closed))
 
       /**
        * handle other illegal signals.

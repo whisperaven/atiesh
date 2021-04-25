@@ -57,6 +57,16 @@ object DirectoryWatchSourceSemantics {
                         stream: IOSource,
                         lines: Iterator[String],
                         offset: Int)
+
+  /**
+   * default impl, use scala.io.Source.fromFile to open files, and then read
+   * line by line.
+   * You can also use atiesh.utils.IO.fromFile, which have exactly the same api
+   * with scala.io.Source but can prevent OOM error when the incoming line are
+   * too long.
+   */
+  val scalaFileOpener: (String, Codec) => IOSource =
+    (path, codec) => IOSource.fromFile(path)(codec)
 }
 
 trait DirectoryWatchSourceSemantics
@@ -125,8 +135,8 @@ trait DirectoryWatchSourceSemantics
       metricsDirectoryWatchSourceComponentInQueueItemsGauge.decrement()
 
       try {
-        val stream = IOSource.fromFile(path.toString)(directoryWatchFileCodec)
-        val lines = stream.getLines().drop(offset)
+        val stream = openFile(path.toString, directoryWatchFileCodec)
+        val lines  = getLinesIterator(stream, offset)
 
         metricsDirectoryWatchSourceOpenFilesCounter.increment()
         metricsDirectoryWatchSourceComponentOpenFilesCounter.increment()
@@ -283,6 +293,18 @@ trait DirectoryWatchSourceSemantics
 
   final protected[this] def getLinesContext: Option[(Path, Int)] =
     inputLines.map(i => { (Paths.get(i.path), i.offset) })
+
+  /**
+   * File Opener, user defined method for open file with filename and
+   * codec, return an scala.io.Source object
+   */
+  def openFile(path: String, codec: Codec): IOSource
+
+  /**
+   * Line Iterator, user defined method for get lines iterator from a
+   * scala.ioSource object with an given lines offset
+   */
+  def getLinesIterator(stream: IOSource, offset: Int): Iterator[String]
 
   /**
    * Thread safe method, user defined hook for files which got EOF, note

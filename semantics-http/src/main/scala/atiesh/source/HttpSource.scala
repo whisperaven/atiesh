@@ -84,8 +84,7 @@ class HttpSource(name: String,
           Compressor.gzipDecompress(req.body.toArray) match {
             case Success(bs) => Some(new String(bs, cfgReqCodec))
             case Failure(exc) =>
-              throw new HttpBadRequestException(
-                s"got unexcepted exception while decompress gzip request", exc)
+              throw new HttpBadRequestException(exc.getMessage, exc)
           }
         } else {
           throw new HttpBadRequestException(
