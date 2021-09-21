@@ -26,6 +26,9 @@ object HttpSource {
     val OPT_HTTP_REQ_CODEC = "request-codec"
     val DEF_HTTP_REQ_CODEC = HttpMessage.charsetName
 
+    val OPT_HTTP_REQ_BODY_EVENT_DELIMITER = "request-body-event-delimiter"
+    val DEF_HTTP_REQ_BODY_EVENT_DELIMITER = "\n"
+
     /**
      * scan and capture http headers of incoming request which starts
      * with this prefix and put them into the atiesh event header
@@ -49,6 +52,20 @@ class HttpSource(name: String,
 
   val cfgReqHeaderCapturePrefix =
     cfg.getStringOption(Opts.OPT_HTTP_REQ_HEADER_CAPTURE_PREFIX)
+  val cfgReqBodyEventDelimiter = {
+    val delimiter = cfg.getString(Opts.OPT_HTTP_REQ_BODY_EVENT_DELIMITER,
+                                  Opts.DEF_HTTP_REQ_BODY_EVENT_DELIMITER)
+    if (delimiter.length == 1) delimiter.head
+    else {
+      throw new SourceInitializeException(
+        s"cannot initialize http source component with given " +
+        s"delimiter <${delimiter}>, which should be single char " +
+        s"not a string with length <${delimiter.length}>, you may want " +
+        s"check the setting of " +
+        s" <${Opts.OPT_HTTP_REQ_BODY_EVENT_DELIMITER}> to a valid one")
+    }
+  }
+
   val cfgReqCodec = {
     val charsetName = cfg.getString(Opts.OPT_HTTP_REQ_CODEC,
                                     Opts.DEF_HTTP_REQ_CODEC)
@@ -92,7 +109,7 @@ class HttpSource(name: String,
         }
       })
       .getOrElse(req.stringBody)
-      .split('\n')
+      .split(cfgReqBodyEventDelimiter)
       .foldLeft(List[Event]())((es, payload) => {
         val headers = cfgReqHeaderCapturePrefix.map(p => {
           req.headers.foldLeft(Map[String, String]())({
