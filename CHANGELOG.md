@@ -4,6 +4,9 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.4.3] - Not Release Yet
+- add custom delimiter opt to http source impl
+
 ## [2.4.2] - 2021-04-25
 - fix KafkaLimitAckSinkSemantics `promise already completed` error
 - add new `openFile` and `getLinesIterator` api to filesystem source semantics
