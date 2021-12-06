@@ -6,8 +6,9 @@ package atiesh.source
 
 // java
 import java.util.Properties
-import java.util.{ Map => JMap, Collection => JCollection }
 import java.util.concurrent.atomic.AtomicLong
+import java.util.{ Map => JMap, Collection => JCollection }
+import java.time.{ Duration => JDuration }
 // scala
 import scala.collection.mutable
 import scala.util.{ Success, Failure }
@@ -42,7 +43,7 @@ object KafkaSourceSemantics extends Logging {
     val OPT_CONSUMER_TOPICS = "topics"
     val DEF_CONSUMER_TOPICS = List[String]()
     val OPT_CONSUMER_POLL_TIMEOUT = "poll-timeout"
-    val DEF_CONSUMER_POLL_TIMEOUT = FiniteDuration(1000, MILLISECONDS)
+    val DEF_CONSUMER_POLL_TIMEOUT = JDuration.ofMillis(1000)
     val OPT_CONSUMER_COMMIT_INTERVAL_POLLS = "commit-polls-interval"
     val DEF_CONSUMER_COMMIT_INTERVAL_POLLS = 0
 
@@ -95,7 +96,7 @@ trait KafkaSourceSemantics
   import Source.Acknowledge
 
   final private[this] var kafkaConsumer: KafkaConsumer[String, String] = _
-  final private[this] var kafkaPollTimeout: FiniteDuration = _
+  final private[this] var kafkaPollTimeout: JDuration = _
 
   final private[this] var kafkaDispatcher: String = _
   final private[this] var kafkaExecutionContext: ExecutionContext = _
@@ -122,7 +123,7 @@ trait KafkaSourceSemantics
     val records =
       try {
         logger.debug("source <{}> cycle start, polling from kafka", getName)
-        kafkaConsumer.poll(kafkaPollTimeout.toMillis)
+        kafkaConsumer.poll(kafkaPollTimeout)
       } catch {
         case exc: Throwable =>
           logger.error("got unexpected exception while " +
@@ -252,8 +253,8 @@ trait KafkaSourceSemantics
     val ccf = cfg.getSection(Opts.OPT_CONSUMER_PROPERTIES_SECTION)
     kafkaConsumer = createConsumer(ccf, topics)
 
-    kafkaPollTimeout = cfg.getDuration(Opts.OPT_CONSUMER_POLL_TIMEOUT,
-                                       Opts.DEF_CONSUMER_POLL_TIMEOUT)
+    kafkaPollTimeout = cfg.getJDuration(Opts.OPT_CONSUMER_POLL_TIMEOUT,
+                                        Opts.DEF_CONSUMER_POLL_TIMEOUT)
     kafkaCommitIntervalPolls = cfg.getLong(
       Opts.OPT_CONSUMER_COMMIT_INTERVAL_POLLS,
       Opts.DEF_CONSUMER_COMMIT_INTERVAL_POLLS)
