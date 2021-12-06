@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [2.4.3] - Not Release Yet
 - add custom delimiter opt to http source impl
+- update deps,
+  - akka-http 10.1.13 -> 10.1.15 (latest of 10.1.x)
+  - config 1.3.3 -> 1.4.1 (latest)
+  - kamon 2.0.4 -> 2.0.5 (latest of 2.0.x)
+  - scala-logging 3.9.0 -> 3.9.4 (latest)
+  - slf4j-api 1.7.29 -> 1.7.32 (latest)
+  - scala kafka to java kafka-clients 2.4.1
+- change kafka `poll` invoke
+- add `getJDuration` to *Configuration* class for read java duration object
 
 ## [2.4.2] - 2021-04-25
 - fix KafkaLimitAckSinkSemantics `promise already completed` error

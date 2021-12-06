@@ -4,6 +4,8 @@
 
 package atiesh.utils
 
+// java
+import java.time.{ Duration => JDuration }
 // scala
 import scala.concurrent.duration._
 import scala.collection.JavaConverters._
@@ -128,6 +130,13 @@ case class Configuration(cfg: Config) {
     getValueOption(path)(p => {
       Duration.fromNanos(cfg.getDuration(p).toNanos)
     })
+
+  def getJDuration(path: String): JDuration =
+    getValue(path)(p => { cfg.getDuration(p) })
+  def getJDuration(path: String, default: JDuration): JDuration =
+    getValue(path, default)(p => { cfg.getDuration(p) })
+  def getJDurationOption(path: String): Option[JDuration] =
+    getValueOption(path)(p => { cfg.getDuration(p) })
 }
 
 object Configuration {
