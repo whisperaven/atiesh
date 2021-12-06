@@ -4,7 +4,7 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [2.4.3] - Not Release Yet
+## [2.4.3] - 2021-12-07
 - add custom delimiter opt to http source impl
 - update deps,
   - akka-http 10.1.13 -> 10.1.15 (latest of 10.1.x)

@@ -7,7 +7,7 @@ import sbt.Keys.{ credentials, publishTo }
 
 lazy val common = Seq(
   organization := "io.0ops",
-  version := "2.4.2",
+  version := "2.4.3",
   scalaVersion := "2.11.12",
 
   /* BuildPaths.defaultGlobalBase => ~/.sbt */
