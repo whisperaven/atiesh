@@ -18,22 +18,22 @@ import atiesh.statement.Ready
 
 object SyslogSinkSemantics {
   object SyslogSinkSemanticsOpts {
-    val OPT_REMOTE_SERVER   = "remote-server"
-    val OPT_REMOTE_PORT     = "remote-port"
-    val OPT_SYSLOG_HOSTNAME = "syslog-hostname"
-    val DEF_SYSLOG_HOSTNAME = "localhost"
-    val OPT_SYSLOG_APPNAME  = "syslog-appname"
-    val DEF_SYSLOG_APPNAME  = "atiesh"
-    val OPT_SYSLOG_FACILITY = "syslog-facility"
-    val DEF_SYSLOG_FACILITY = "user"
-    val OPT_SYSLOG_SEVERITY = "syslog-severity"
-    val DEF_SYSLOG_SEVERITY = "informational"
-    val OPT_SSL_CA_CERT     = "syslog-ssl-cacert"
+    val OPT_REMOTE_SERVER     = "remote-server"
+    val OPT_REMOTE_PORT       = "remote-port"
+    val OPT_SYSLOG_HOSTNAME   = "syslog-hostname"
+    val DEF_SYSLOG_HOSTNAME   = "localhost"
+    val OPT_SYSLOG_APPNAME    = "syslog-appname"
+    val DEF_SYSLOG_APPNAME    = "atiesh"
+    val OPT_SYSLOG_FACILITY   = "syslog-facility"
+    val DEF_SYSLOG_FACILITY   = "user"
+    val OPT_SYSLOG_SEVERITY   = "syslog-severity"
+    val DEF_SYSLOG_SEVERITY   = "informational"
+    val OPT_SYSLOG_SSL_CACERT = "syslog-ssl-cacert"
 
-    val OPT_SYSLOG_IMPL      = "syslog-implemenation"
-    val DEF_SYSLOG_IMPL      = SYSLOG_VALID_IMPLEMENTATIONS(1)
-    val OPT_MAX_RETRIES      = "max-retries"
-    val DEF_MAX_RETRIES: Int = 3
+    val OPT_SYSLOG_IMPL       = "syslog-implemenation"
+    val DEF_SYSLOG_IMPL       = SYSLOG_VALID_IMPLEMENTATIONS(1)
+    val OPT_MAX_RETRIES       = "max-retries"
+    val DEF_MAX_RETRIES: Int  = 3
   }
   val SYSLOG_VALID_IMPLEMENTATIONS = Array[String](
     "rfc3164tcp", "rfc3164udp", "rfc3164tls",
@@ -63,7 +63,7 @@ trait SyslogSinkSemantics extends SinkSemantics with Logging { this: Sink =>
         s"${cfgSyslogImplementation}>, should be one of <" +
         s"${SYSLOG_VALID_IMPLEMENTATIONS.mkString(",")}>")
     }
-    val cfgCACertOpt = cfg.getStringOption(Opts.OPT_SSL_CA_CERT)
+    val cfgSyslogCACertOpt = cfg.getStringOption(Opts.OPT_SYSLOG_SSL_CACERT)
 
     val cfgSyslogHostname = cfg.getString(Opts.OPT_SYSLOG_HOSTNAME,
                                           Opts.DEF_SYSLOG_HOSTNAME)
@@ -107,7 +107,7 @@ trait SyslogSinkSemantics extends SinkSemantics with Logging { this: Sink =>
         sender.setSyslogServerPort(cfgRemotePort)
         sender.setMaxRetryCount(cfgPushMaxRetries)
 
-        cfgCACertOpt.map(caCert => {
+        cfgSyslogCACertOpt.map(caCert => {
           sender.setSSLContext(
             PKI.createSSLContext(
               PKI.openX509Certificate(caCert)))
