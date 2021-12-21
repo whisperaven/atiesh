@@ -13,7 +13,7 @@ import com.cloudbees.syslog.{ Facility, Severity, MessageFormat }
 import scala.util.Try
 import scala.concurrent.Promise
 // internal
-import atiesh.utils.{ Configuration, Logging }
+import atiesh.utils.{ Configuration, Logging, PKI }
 import atiesh.statement.Ready
 
 object SyslogSinkSemantics {
@@ -28,6 +28,7 @@ object SyslogSinkSemantics {
     val DEF_SYSLOG_FACILITY = "user"
     val OPT_SYSLOG_SEVERITY = "syslog-severity"
     val DEF_SYSLOG_SEVERITY = "informational"
+    val OPT_SSL_CA_CERT     = "syslog-ssl-cacert"
 
     val OPT_SYSLOG_IMPL      = "syslog-implemenation"
     val DEF_SYSLOG_IMPL      = SYSLOG_VALID_IMPLEMENTATIONS(1)
@@ -62,6 +63,7 @@ trait SyslogSinkSemantics extends SinkSemantics with Logging { this: Sink =>
         s"${cfgSyslogImplementation}>, should be one of <" +
         s"${SYSLOG_VALID_IMPLEMENTATIONS.mkString(",")}>")
     }
+    val cfgCACertOpt = cfg.getStringOption(Opts.OPT_SSL_CA_CERT)
 
     val cfgSyslogHostname = cfg.getString(Opts.OPT_SYSLOG_HOSTNAME,
                                           Opts.DEF_SYSLOG_HOSTNAME)
@@ -97,13 +99,21 @@ trait SyslogSinkSemantics extends SinkSemantics with Logging { this: Sink =>
         sender.setSyslogServerHostname(cfgRemoteServer)
         sender.setSyslogServerPort(cfgRemotePort)
         sender.setMaxRetryCount(cfgPushMaxRetries)
+        sender.setSsl(false)
         sender
       case "rfc3164tls" | "rfc5424tls" | "rfc6587tls" =>
         val sender = new TcpSyslogMessageSender()
         sender.setSyslogServerHostname(cfgRemoteServer)
         sender.setSyslogServerPort(cfgRemotePort)
         sender.setMaxRetryCount(cfgPushMaxRetries)
+
+        cfgCACertOpt.map(caCert => {
+          sender.setSSLContext(
+            PKI.createSSLContext(
+              PKI.openX509Certificate(caCert)))
+        })
         sender.setSsl(true)
+
         sender
       case "rfc3164udp" | "rfc5425udp"                =>
         val sender = new UdpSyslogMessageSender()
