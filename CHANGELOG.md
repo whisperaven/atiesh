@@ -4,7 +4,7 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [2.4.3] - Not Release Yet
+## [2.4.4] - 2021-12-27
 - add simple PKI utils
 - add default syslog sink component
 - add ssl support for syslog semantics
