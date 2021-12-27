@@ -4,6 +4,13 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.4.5]
+- bug fix, any exception throw inside `runFold` for response body reading no longer shutdown the http stream
+- bug fix, graceful shutdown of `BatchSinkSemantics` was properly handled
+- bug fix, now http can use proper dispatcher initialize stream `ActorMaterializer`
+- improvement, http source now raise `HttpTooManyRequestException` instead of block the client forever
+- improvement, new hooks for connect accept and terminate for http source
+
 ## [2.4.4] - 2021-12-27
 - add simple PKI utils
 - add default syslog sink component

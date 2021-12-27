@@ -175,9 +175,13 @@ trait KafkaLimitAckSinkSemantics
        * handle other illegal signals.
        */
       case _ =>
-        logger.error("kafka sink semantics of sink <{}> got illegal " +
-                     "signal num <{}> which means you may use a " +
-                     "kafka sink with wrong implementation", getName, sig)
+        if (sig < 0) {
+          super.process(sig)  /* passing-through core signals */
+        } else {
+          logger.error("kafka sink semantics of sink <{}> got illegal " +
+                       "signal num <{}> which means you may use a " +
+                       "kafka sink with wrong implementation", getName, sig)
+        }
     }
   }
 
