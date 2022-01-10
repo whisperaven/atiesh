@@ -1,4 +1,4 @@
-name: Scala CI - Manually triggered workflow
+name: Atiesh Manually Package & Publish
 
 on: 
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         default: 'CI Test'
 
 jobs:
-  package:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,20 +26,66 @@ jobs:
         java-version: '8'
         distribution: 'temurin'
         
+    ## Package
     - name: Package Core
       run: sbt 'project core; clean; package'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Package HttpUtils
       run: sbt 'project httputils; clean; package'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Package HttpSemantics
       run: sbt 'project http; clean; package'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Package FilesystemSemantics
       run: sbt 'project filesystem; clean; package'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Package KafkaSemantics
       run: sbt 'project kafka; clean; package'
-      
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     # Experiment
     - name: Package syslog
       run: sbt 'project syslog; clean; package'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Package aliyun
       run: sbt 'project aliyun; clean; package'
-    
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    ## Publish
+    - name: Package Core
+      run: sbt 'project core; publish'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Package HttpUtils
+      run: sbt 'project httputils; publish'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Package HttpSemantics
+      run: sbt 'project http; publish'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Package FilesystemSemantics
+      run: sbt 'project filesystem; publish'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Package KafkaSemantics
+      run: sbt 'project kafka; publish'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Experiment
+    - name: Package syslog
+      run: sbt 'project syslog; publish'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Package aliyun
+      run: sbt 'project aliyun; publish'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

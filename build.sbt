@@ -1,4 +1,4 @@
-/*
+/**
  * Copyright (C) Hao Feng
  */
 
@@ -9,9 +9,23 @@ lazy val common = Seq(
   organization := "io.0ops",
   version := "2.4.4",
   scalaVersion := "2.11.12",
+
+  /**
+   * configs for sbt-github-packages plugin:
+   *    - make sure you have these in ~/.gitconfig
+   *      > [github]
+   *      >   token = GITHUB_TOKEN
+   *    - or have the following env variable
+   *      > export GITHUB_TOKEN="GITHUB_TOKEN"
+   *    - the GitHub Actions will use env <GITHUB_TOKEN>
+   */
+  githubOwner := "whisperaven",
+  githubRepository := "atiesh",
+  githubTokenSource := TokenSource.GitConfig("github.token") ||
+                       TokenSource.Environment("GITHUB_TOKEN")
 )
 
-/*
+/**
  * default builds:
  *  => core
  *  => httputils => http
@@ -91,7 +105,7 @@ lazy val kafka = (project in file("semantics-kafka"))
     )
   ).dependsOn(core)
 
-/*
+/**
  * atiesh semantics - syslog (experiment),
  *      we don't build this by default
  *
@@ -109,7 +123,7 @@ lazy val syslog = (project in file("semantics-syslog"))
     )
   ).dependsOn(core)
 
-/*
+/**
  * atiesh semantics - aliyun,
  *      too much deps with conflicts warns,
  *      we don't build this by default
