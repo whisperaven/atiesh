@@ -9,9 +9,6 @@ lazy val common = Seq(
   organization := "io.0ops",
   version := "2.4.4",
   scalaVersion := "2.11.12",
-
-  /* BuildPaths.defaultGlobalBase => ~/.sbt */
-  credentials += Credentials(BuildPaths.defaultGlobalBase / ".credentials")
 )
 
 /*
