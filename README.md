@@ -1,5 +1,9 @@
 # Atiesh
 
+![License](https://img.shields.io/github/license/whisperaven/atiesh)
+![Release](https://img.shields.io/github/v/release/whisperaven/atiesh)
+![CI](https://img.shields.io/github/workflow/status/whisperaven/atiesh/Atiesh%20Release%20&%20Publish%20to%20GitHub%20Packages/master)
+
 **Atiesh** is an open-source stream-processing framework, developed on top of **akka-actor (classic)** with builtin simple and reliable backpressure mechanism.
 
 In WoW, Atiesh is the *Greatstaff of the Guardian*, hope that you use it open a portal for your data-stream just like what Medivh do for the Orc :>
