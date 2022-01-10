@@ -1,4 +1,4 @@
-name: Atiesh Manually Package & Publish
+name: Atiesh Manually Package
 
 on: 
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
         required: true
         default: 'Hao Feng (whisperaven@gmail.com)'
       'reason':
-        description: 'Action Reason (for Waht)'
+        description: 'Action Reason (for What)'
         required: true
         default: 'CI Test'
 
@@ -55,37 +55,5 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Package aliyun
       run: sbt 'project aliyun; clean; package'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    ## Publish
-    - name: Package Core
-      run: sbt 'project core; publish'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Package HttpUtils
-      run: sbt 'project httputils; publish'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Package HttpSemantics
-      run: sbt 'project http; publish'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Package FilesystemSemantics
-      run: sbt 'project filesystem; publish'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Package KafkaSemantics
-      run: sbt 'project kafka; publish'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    # Experiment
-    - name: Package syslog
-      run: sbt 'project syslog; publish'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Package aliyun
-      run: sbt 'project aliyun; publish'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
