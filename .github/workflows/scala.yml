@@ -1,0 +1,45 @@
+name: Scala CI - Manually triggered workflow
+
+on: 
+  workflow_dispatch:
+    inputs:
+      'publisher':
+        description: 'Developer Name (by Who)'
+        required: true
+        default: 'Hao Feng (whisperaven@gmail.com)'
+      'reason':
+        description: 'Action Reason (for Waht)'
+        required: true
+        default: 'CI Test'
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Master
+      uses: actions/checkout@v2
+
+    - name: Set up JDK 8
+      uses: actions/setup-java@v2
+      with:
+        java-version: '8'
+        distribution: 'temurin'
+        
+    - name: Package Core
+      run: sbt 'project core; clean; package'
+    - name: Package HttpUtils
+      run: sbt 'project httputils; clean; package'
+    - name: Package HttpSemantics
+      run: sbt 'project http; clean; package'
+    - name: Package FilesystemSemantics
+      run: sbt 'project filesystem; clean; package'
+    - name: Package KafkaSemantics
+      run: sbt 'project kafka; clean; package'
+      
+    # Experiment
+    - name: Package syslog
+      run: sbt 'project syslog; clean; package'
+    - name: Package aliyun
+      run: sbt 'project aliyun; clean; package'
+    
