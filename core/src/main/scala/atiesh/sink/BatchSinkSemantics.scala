@@ -33,6 +33,9 @@ object BatchSinkSemantics {
     val OPT_BATCH_AKKA_DISPATCHER = "batch-akka-dispatcher"
     val DEF_BATCH_AKKA_DISPATCHER = "akka.actor.default-dispatcher"
   }
+  object BatchSinkSemanticsSignals {
+    val SIG_BATCH_TERM = -1
+  }
   val DEF_BATCH_TAG = "__atiesh_default__"
 
   private[sink] object BatchBuffer extends Logging {
@@ -75,7 +78,8 @@ object BatchSinkSemantics {
 trait BatchSinkSemantics
   extends SinkSemantics
   with Logging { this: Sink =>
-  import BatchSinkSemantics.{ BatchSinkSemanticsOpts => Opts, _ }
+  import BatchSinkSemantics.{ BatchSinkSemanticsOpts => Opts,
+                              BatchSinkSemanticsSignals => Sig, _ }
   object BatchManagerActor {
     /*
      * Inner class BantchManagerActor class are different class in each
@@ -203,10 +207,22 @@ trait BatchSinkSemantics
     } else {
       buffers.keySet().iterator().asScala
              .foreach(tag => { batchFlush(tag, false) })
-      batchManager ! Close(closed)
+      signal(Sig.SIG_BATCH_TERM)
+      closed.failure(
+        new SinkClosedException("new batch has flushed, delay closing"))
     }
   }
 
+  override def process(sig: Int): Unit = {
+    if (sig == Sig.SIG_BATCH_TERM) {
+      logger.debug("batch manager of sink <{}> got TERM signal, now closing " +
+                   "internal batch manager", getName)
+      batchDelayedCloseStem.map(closed => super.close(closed))
+    } else super.process(sig) /* passing-through core signals */
+  }
+
+  @volatile final private[this]
+    var batchDelayedCloseStem: Option[Promise[Closed]] = None
   override def close(closed: Promise[Closed]): Unit = {
     val p = Promise[Closed]()
     batchManager ! Close(p)
@@ -215,11 +231,17 @@ trait BatchSinkSemantics
       case Success(flushed) =>
         logger.debug("batch manager of sink <{}> flush " +
                      "all internal buffers", getName)
+        super.close(closed)
+      case Failure(exc: SinkClosedException) =>
+        logger.debug("batch manager of sink <{}> got new flushed " +
+                     "buffers, delay closing, waiting for term signal",
+                     getName)
+        batchDelayedCloseStem = Option(closed)
       case Failure(exc) =>
         logger.error(s"batch manager of sink <${getName}> can not " +
                      s"flush internal buffers, skip flush", exc)
+        super.close(closed)
     }
-    super.close(closed)
   }
 
   def batchAppend(event: Event): Unit = batchManager ! event

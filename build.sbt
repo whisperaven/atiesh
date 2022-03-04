@@ -55,6 +55,7 @@ lazy val dependencies = Seq(
 ).map(_.excludeAll(ExclusionRule("io.kamon", "kamon-core_2.11"),
                    ExclusionRule("com.typesafe", "config"),
                    ExclusionRule("org.slf4j", "slf4j-api")))
+lazy val showDepsJars = taskKey[Unit]("dependencies classpath (local jar files) of the current project.")
 
 /* atiesh core framework */
 lazy val core = (project in file("core"))
@@ -83,7 +84,12 @@ lazy val http = (project in file("semantics-http"))
     libraryDependencies ++= Seq(
       "com.typesafe.akka" %% "akka-stream" % "2.5.26",
       "com.typesafe.akka" %% "akka-http" % "10.1.10"
-    )
+    ),
+    showDepsJars := {
+      (Compile / externalDependencyClasspath).value
+        .map(_.data)    /* List[java.io.File] */
+        .foreach(file => { println(file.toString) })
+    }
   ).dependsOn(httputils)
 
 /* atiesh semantics - files */
@@ -91,7 +97,12 @@ lazy val filesystem = (project in file("semantics-filesystem"))
   .settings(
     common,
     name := "atiesh-semantics-filesystem",
-    libraryDependencies ++= dependencies
+    libraryDependencies ++= dependencies,
+    showDepsJars := {
+      (Compile / externalDependencyClasspath).value
+        .map(_.data)    /* List[java.io.File] */
+        .foreach(file => { println(file.toString) })
+    }
   ).dependsOn(core)
 
 /* atiesh semantics - kafka */
@@ -102,7 +113,12 @@ lazy val kafka = (project in file("semantics-kafka"))
     libraryDependencies ++= Seq(
       "org.apache.kafka" % "kafka-clients" % "2.4.1"
         exclude("org.slf4j", "slf4j-api"),
-    )
+    ),
+    showDepsJars := {
+      (Compile / externalDependencyClasspath).value
+        .map(_.data)    /* List[java.io.File] */
+        .foreach(file => { println(file.toString) })
+    }
   ).dependsOn(core)
 
 /**
@@ -120,7 +136,12 @@ lazy val syslog = (project in file("semantics-syslog"))
     name := "atiesh-semantics-syslog",
     libraryDependencies ++= Seq(
       "com.cloudbees" % "syslog-java-client" % "1.1.7"
-    )
+    ),
+    showDepsJars := {
+      (Compile / externalDependencyClasspath).value
+        .map(_.data)    /* List[java.io.File] */
+        .foreach(file => { println(file.toString) })
+    }
   ).dependsOn(core)
 
 /**
@@ -141,5 +162,10 @@ lazy val aliyun = (project in file("semantics-aliyun"))
       "com.aliyun.openservices" % "aliyun-log-producer" % "0.2.0"
         exclude("org.slf4j", "slf4j-api") exclude("org.slf4j", "slf4j-log4j12")
         exclude("ch.qos.logback", "logback-core") exclude("ch.qos.logback", "logback-classic"),
-    )
+    ),
+    showDepsJars := {
+      (Compile / externalDependencyClasspath).value
+        .map(_.data)    /* List[java.io.File] */
+        .foreach(file => { println(file.toString) })
+    }
   ).dependsOn(core)

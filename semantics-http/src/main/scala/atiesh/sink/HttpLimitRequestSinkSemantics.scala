@@ -47,6 +47,7 @@ trait HttpLimitRequestSinkSemantics
     HttpLimitRequestSinkSemanticsOpts => Opts, _ }
   import HttpOperationStates._
 
+  /* TODO: this value only updated inside actor, no atomic required? */
   final private[this] val httpRequests: AtomicLong = new AtomicLong(0)
   /* cfgs are writen once on start inside open */
   final private[this] var cfgHttpRequestLimits: Long = 0
@@ -55,7 +56,7 @@ trait HttpLimitRequestSinkSemantics
   final private[this] var cfgHttpRequestDumpPath: Option[Path] = None
 
   /**
-   * Internal API - httpResponseFutureHandler
+   * Internal API - httpResponseFutureHandler (future context, not threadsafe)
    *
    * Use as future callback of httpRequest, which handle retries and hook in
    * the user defined httpResponseHandler to handle response.
@@ -81,7 +82,7 @@ trait HttpLimitRequestSinkSemantics
     httpResponseFutureHandler(request, response, events, retries, 0.0)
 
   /**
-   * Internal API - httpEnqueueRetryRequest
+   * Internal API - httpEnqueueRetryRequest (future context, not threadsafe)
    *
    * Handle retries, push HttpMaxRetryException to user defined
    * httpResponseHandler when there is no more retries.
@@ -119,11 +120,15 @@ trait HttpLimitRequestSinkSemantics
       })
       httpComplete()
     } else {
-      val delay =
-        Duration(
-          math.min(math.pow(2.0, backoff) * 1000 + Random.nextInt(1000),
-                   cfgHttpRequestRetryBackoffMills).toLong,
-          MILLISECONDS)
+      val delay = {
+        if (httpIsClosing) {
+          Duration(0L, MILLISECONDS)
+        } else {
+          Duration(
+            math.min(math.pow(2.0, backoff) * 1000 + Random.nextInt(1000),
+                     cfgHttpRequestRetryBackoffMills).toLong,
+            MILLISECONDS) }
+        }
       httpRetry(req, delay).onComplete(response => {
         /* handle retry correctly, to prevent overflow:
          *  - reset to -1
@@ -152,12 +157,14 @@ trait HttpLimitRequestSinkSemantics
             logger.debug("sink <{}> acknowledge delayed commit " +
                          "transaction(s), current <{}> open requests",
                          getName, requests)
-            ack(committer, tran)
+            super.ack(committer, tran)
         })
       transactions.clear()
     }
 
-    if (requests == 0) closing.map(closed => close(closed))
+    if (requests == 0) {
+      httpLimitDelayedCloseStem.map(closed => httpDumpAndClose(closed))
+    }
   }
 
   /**
@@ -206,7 +213,7 @@ trait HttpLimitRequestSinkSemantics
    * Thread safe method, Return true if the HttpLimitRequestSinkSemantics
    * receive a close statement.
    */
-  final def httpIsClosing: Boolean = !closing.isEmpty
+  final def httpIsClosing: Boolean = !httpLimitDelayedCloseStem.isEmpty
 
   override def open(ready: Promise[Ready]): Unit = {
     cfgHttpRequestLimits = getConfiguration.getLong(Opts.OPT_REQUEST_LIMITS,
@@ -258,8 +265,9 @@ trait HttpLimitRequestSinkSemantics
               }
             case Failure(exc) =>
               throw new SinkInitializeException(
-                s"cannot initialize http limit request sink with given non " +
-                s"writeable dump path, you may want change the setting of " +
+                s"sink <${getName}> cannot initialize http limit request " +
+                s"semantics with given non writeable dump path, you may want" +
+                s" change the setting of " +
                 s"<${Opts.OPT_REQUEST_DUMP_FILE_ON_SHUTDOWN}> to a " +
                 s"writeable one", exc)
           }
@@ -362,25 +370,30 @@ trait HttpLimitRequestSinkSemantics
       })
   }
 
-  @volatile final private[this] var closing: Option[Promise[Closed]] = None
+  final private def httpDumpAndClose(closed: Promise[Closed]): Unit = {
+    if (!httpDumpQueue.isEmpty) {
+      try {
+        val dumpLines = httpDumpEvents(cfgHttpRequestDumpPath.get)
+        logger.info("sink <{}> total dump <{}> events before close",
+                    getName, dumpLines)
+      } catch {
+        case exc: Throwable =>
+          logger.error(s"sink <${getName}> cannot dump events to disk, " +
+                       s"got unexcepted exception, abort and close", exc)
+      }
+    }
+    super.close(closed)
+  }
+
+  @volatile final private[this]
+    var httpLimitDelayedCloseStem: Option[Promise[Closed]] = None
   override def close(closed: Promise[Closed]): Unit =
     if (httpRequests.get() != 0) {
       logger.info("sink <{}> still have <{}> open requests, " +
                   "delay close <{}@{}>", getName, httpRequests.get(), closed,
                                          closed.hashCode.toHexString)
-      closing = Some(closed)
+      httpLimitDelayedCloseStem = Option(closed)
     } else {
-      if (!httpDumpQueue.isEmpty) {
-        try {
-          val dumpLines = httpDumpEvents(cfgHttpRequestDumpPath.get)
-          logger.info("sink <{}> total dump <{}> events before close",
-                      getName, dumpLines)
-        } catch {
-          case exc: Throwable =>
-            logger.error(s"sink <${getName}> cannot dump events to disk, " +
-                         s"got unexcepted exception, abort and close", exc)
-        }
-      }
-      super.close(closed)
+      httpDumpAndClose(closed)
     }
 }

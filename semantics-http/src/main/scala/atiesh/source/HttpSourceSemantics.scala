@@ -6,13 +6,17 @@ package atiesh.source
 
 // java
 import java.net.URL
+import java.net.InetSocketAddress
+import java.util.concurrent.Semaphore
 // scala
 import scala.util.{ Try, Failure, Success }
 import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Await, Promise, Future }
 // akka
+import akka.Done
 import akka.actor.ActorSystem
-import akka.stream.{ ActorMaterializer, Materializer }
+import akka.stream.{ Materializer, ActorMaterializer,
+                     ActorMaterializerSettings }
 import akka.stream.scaladsl.{ Source => AkkaSource,
                               Sink => AkkaSink, _ }
 import akka.http.scaladsl.{ Http, HttpExt }
@@ -26,7 +30,7 @@ import akka.http.scaladsl.model.{ HttpMethod => AkkaHttpMethod,
 import akka.util.ByteString
 // internal
 import atiesh.event.Event
-import atiesh.statement.{ Ready, Closed }
+import atiesh.statement.{ Ready, Closed, Confirmation }
 import atiesh.utils.{ Configuration, Logging }
 import atiesh.utils.http.{ HttpMessage, HttpRequest, HttpResponse }
 
@@ -73,6 +77,7 @@ trait HttpSourceSemantics
   final private[this] var httpConnProcessor: HttpConnProcessor = _
   final private[this] var httpServer: Http.ServerBinding = _
 
+  final private[this] var httpRequestSem: Semaphore = _
   final private[this] var httpShutdownTimeout: FiniteDuration = _
   final private[this] var httpWithoutRequestSizeLimit: Boolean = _
   final private[this] var httpWithoutResponseSizeLimit: Boolean = _
@@ -130,6 +135,7 @@ trait HttpSourceSemantics
     }
     val maxConnections = cfg.getInt(Opts.OPT_MAX_CONNECTIONS,
                                     Opts.DEF_MAX_CONNECTIONS)
+    httpRequestSem = new Semaphore(maxConnections)
 
     httpShutdownTimeout =
       cfg.getDuration(Opts.OPT_SHUTDOWN_TIMEOUT,
@@ -144,7 +150,9 @@ trait HttpSourceSemantics
     httpDispatcher = cfg.getString(Opts.OPT_AKKA_DISPATCHER,
                                    Opts.DEF_AKKA_DISPATCHER)
     httpExecutionContext = system.dispatchers.lookup(httpDispatcher)
-    httpMaterializer = ActorMaterializer()
+    httpMaterializer = ActorMaterializer(ActorMaterializerSettings(system)
+                                           .withDispatcher(httpDispatcher),
+                                         getName)(system)
 
     httpConnProcessor =
       /*
@@ -168,8 +176,8 @@ trait HttpSourceSemantics
           })(httpExecutionContext)
         }))
         .mapAsync(maxConnections)(conn => {
-          logger.debug("source <{}> accepted new connection " +
-                       "from <{}>", getName, conn.remoteAddress)
+          httpConnOnAccept(conn.remoteAddress, conn.localAddress)
+
           /*
            * the return value of handleWith method of IncomingConnection is the
            * matValue of connection handle Flow which is represented as:
@@ -200,7 +208,13 @@ trait HttpSourceSemantics
                 }))
               .mapAsync(1)(req => httpRequestAkkaHandler(req))
               /* react to connection stream terminate (connection closed) */
-              .watchTermination()((_, done) => done))(httpMaterializer)
+              .watchTermination()((_, closed) => {
+                closed.onComplete(
+                  httpConnOnTerminate(conn.remoteAddress,
+                                      conn.localAddress))(
+                                      httpExecutionContext)
+                closed
+              }))(httpMaterializer)
         })
         .to(AkkaSink.ignore)
   }
@@ -250,10 +264,20 @@ trait HttpSourceSemantics
   def httpRequestHandler(req: HttpRequest): Future[HttpResponse] =
     Try { httpRequestExtractEvents(req) } match {
       case Success(events) =>
-        scheduleNextCycle(events)
-          .map(_ => {
-            httpRequestRespond(req, events)
-          })(httpExecutionContext)
+        if (!httpRequestSem.tryAcquire()) {
+          throw new HttpTooManyRequestException(
+            s"source <${getName}> got too many incoming http request")
+        }
+        logger.debug("source <{}> require httpReqSem for request <{}> " +
+                     "successful", getName, req.hashCode.toHexString)
+        httpRequestRespond(req, events,
+                           scheduleNextCycle(events).andThen({
+                             case _ =>
+                               httpRequestSem.release()
+                               logger.debug("source <{}> release httpReqSem " +
+                                            "for request <{}> successful",
+                                            getName, req.hashCode.toHexString)
+                           })(httpExecutionContext))
       case Failure(exc) =>
         Future.failed(exc)
     }
@@ -283,8 +307,8 @@ trait HttpSourceSemantics
    * Any exception thrown here, will be caught by httpRequestErrorHandler
    * later for decide the proper response to send to the client.
    */
-  def httpRequestRespond(req: HttpRequest,
-                         events: List[Event]): HttpResponse
+  def httpRequestRespond(req: HttpRequest, events: List[Event],
+                         confirm: Future[Confirmation]): Future[HttpResponse]
 
   /**
    * Not thread safe method, user defined request level error handler, no
@@ -304,6 +328,22 @@ trait HttpSourceSemantics
    * from an incomming connection, this handler called.
    */
   def httpConnErrorHandler: PartialFunction[Throwable, HttpRequest]
+
+  /**
+   * Not thread safe method, user defined connection level accept hook,
+   * whatever a connection was accepted, this method was called.
+   */
+  def httpConnOnAccept(remoteAddress: InetSocketAddress,
+                       localAddress: InetSocketAddress): Unit
+
+  /**
+   * Not thread safe method, user defined connection level terminate hook,
+   * whatever a connection was closed, the partial function returned by this
+   * method was called as future callback.
+   */
+  def httpConnOnTerminate(
+    remoteAddress: InetSocketAddress,
+    localAddress: InetSocketAddress): PartialFunction[Try[_], Unit]
 
   override def open(ready: Promise[Ready]): Unit = {
     httpServer =

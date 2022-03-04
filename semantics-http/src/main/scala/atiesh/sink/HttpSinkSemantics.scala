@@ -13,7 +13,8 @@ import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Await, Promise, Future }
 // akka
 import akka.actor.{ ActorSystem, Scheduler }
-import akka.stream.{ ActorMaterializer, Materializer }
+import akka.stream.{ Materializer, ActorMaterializer,
+                     ActorMaterializerSettings }
 import akka.stream.{ OverflowStrategy, QueueOfferResult }
 import akka.stream.scaladsl.{ Sink => AkkaSink, _ }
 import akka.http.scaladsl.Http
@@ -123,7 +124,9 @@ trait HttpSinkSemantics
         s.withIdleTimeout(Duration.Inf)
       } else s
     }
-    httpMaterializer = ActorMaterializer()
+    httpMaterializer = ActorMaterializer(ActorMaterializerSettings(system)
+                                           .withDispatcher(httpDispatcher),
+                                         getName)(system)
     httpProcessorFlow = {
       if (remoteProto == "https") {
         Http().newHostConnectionPoolHttps[Promise[HttpResponse]](
@@ -163,10 +166,19 @@ trait HttpSinkSemantics
             bodyStream.runFold(ByteString.empty)({ /* read response body */
                 case (acc, b) => { acc ++ b }
               })(httpMaterializer)
-              .flatMap(content => {
+              .map(content => {
                 p.success(HttpResponse(status, headers, content))
-                Future.successful(())
               })(httpExecutionContext)
+              .recover({ /* avoid the stream fails because of single request */
+                case exc: Throwable =>
+                  logger.debug(s"http sink semantics of sink <${getName}> " +
+                               s"got unexpected exception while read body " +
+                               s"from remote response, status <${status}" +
+                               s"> with header(s) <${headers.mkString(", ")}>",
+                               exc)
+                  p.failure(exc)
+              })(httpExecutionContext)
+              .map(_ => ())(httpExecutionContext)
           case ((Failure(exc), p)) =>
             p.failure(exc)
             Future.successful(())
@@ -215,9 +227,13 @@ trait HttpSinkSemantics
        * handle other illegal signals.
        */
       case _ =>
-        logger.error("http sink semantics of sink <{}> got illegal " +
-                     "signal num <{}> which means you may use a " +
-                     "http sink with wrong implementation", getName, sig)
+        if (sig < 0) {
+          super.process(sig)  /* passing-through core signals */
+        } else {
+          logger.error("http sink semantics of sink <{}> got illegal " +
+                       "signal num <{}> which means you may use a " +
+                       "http sink with wrong implementation", getName, sig)
+        }
     }
   }
 
@@ -292,6 +308,9 @@ trait HttpSinkSemantics
    */
   def httpCompleteHandler(): Unit
 
+  /**
+   * Don't forget to handle the inflight requests before close http layer.
+   */
   override def close(closed: Promise[Closed]): Unit = {
     logger.info("sink <{}> closing http semantics context", getName)
 

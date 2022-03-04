@@ -6,21 +6,26 @@ package atiesh.source
 
 // java
 import java.nio.charset.Charset
+import java.net.InetSocketAddress
 // scala
 import scala.concurrent.Future
-import scala.util.{ Success, Failure }
+import scala.util.{ Try, Success, Failure }
 // internal 
 import atiesh.interceptor.Interceptor
 import atiesh.sink.Sink
+import atiesh.statement.Confirmation
 import atiesh.event.{ Event, SimpleEvent }
 import atiesh.utils.{ Configuration, Logging, Compressor }
 import atiesh.utils.http.{ HttpMessage, HttpRequest, HttpResponse,
                            HttpBadRequestException }
 
 object HttpSource {
-  val HTTP_SUCCESS_RESPONSE_CODE        = 201
-  val HTTP_BAD_REQUEST_RESPONSE_CODE    = 400
-  val HTTP_INTERNAL_ERROR_RESPONSE_CODE = 500
+  /* predefine successful response codes */
+  val HTTP_SUCCESS_RESPONSE_CODE = 201
+  /* predefine failed response codes */
+  val HTTP_BAD_REQUEST_RESPONSE_CODE         = 400
+  val HTTP_INTERNAL_ERROR_RESPONSE_CODE      = 500
+  val HTTP_SERVICE_UNAVAILABLE_RESPONSE_CODE = 503
 
   object HttpSourceOpts {
     val OPT_HTTP_REQ_CODEC = "request-codec"
@@ -125,11 +130,11 @@ class HttpSource(name: String,
   /**
    * The normal http request responder, error response not initialize here.
    */
-  def httpRequestRespond(req: HttpRequest,
-                         events: List[Event]): HttpResponse =
-    HttpResponse(HTTP_SUCCESS_RESPONSE_CODE,
-                 Map[String, String](),
-                 HttpMessage.emptyBody)
+  def httpRequestRespond(req: HttpRequest, events: List[Event],
+                         confirm: Future[Confirmation]): Future[HttpResponse] =
+    Future.successful(
+      HttpResponse(HTTP_SUCCESS_RESPONSE_CODE,
+                   Map[String, String](), HttpMessage.emptyBody))
 
   /**
    * The http error responder, all error handled here.
@@ -140,6 +145,12 @@ class HttpSource(name: String,
                    s"response with status code 400", exc)
       HttpResponse(HTTP_BAD_REQUEST_RESPONSE_CODE, Map[String, String](),
                         s"Bad Request, ${exc.getMessage}")
+    case exc: HttpTooManyRequestException =>
+      logger.error(s"source <${getName}> unable to process incoming request, " +
+                   s"too many requests", exc)
+      HttpResponse(HTTP_SERVICE_UNAVAILABLE_RESPONSE_CODE,
+                   Map[String, String](),
+                   s"Too Many Requests, ${exc.getMessage}")
     case _ => HttpResponse(HTTP_INTERNAL_ERROR_RESPONSE_CODE,
                            Map[String, String](), "Internal Server Error")
   }
@@ -154,6 +165,34 @@ class HttpSource(name: String,
       logger.error(s"http source <${getName}> got unexcepted connection " +
                    s"error, cannot process current request, exception:", exc)
       throw exc
+  }
+
+  /**
+   * The http connection accept hook, whatever a connection was accepted, this
+   * method was called.
+   */
+  def httpConnOnAccept(remoteAddress: InetSocketAddress,
+                       localAddress: InetSocketAddress): Unit =
+    logger.debug("source <{}> accepted new connection " +
+                 "from <{} (remote)> - <{} (local)>",
+                 getName, remoteAddress, localAddress)
+
+  /**
+   * The http connection terminate hook, whatever a connection was closed,
+   * the partial function returned by this method was provided as a scala
+   * future callback
+   * (e.g.: conn.doneFuture.onComplete(httpConnOnTerminate(remote, local)).
+   */
+  def httpConnOnTerminate(
+    remoteAddress: InetSocketAddress,
+    localAddress: InetSocketAddress): PartialFunction[Try[_], Unit] = {
+    case Success(_) =>
+      logger.debug("source <{}> closeing connection of <{} (remote)> - <{}" +
+                   " (local)>", getName, remoteAddress, localAddress)
+    case Failure(exc) =>
+      logger.error(s"source <${getName}> got unexcepted exception while " +
+                   s"handle connection of <${remoteAddress} (remote)>" +
+                   s" - <${localAddress} (local)>", exc)
   }
 
   def shutdown(): Unit = logger.info("shutting down http source <{}>", getName)
