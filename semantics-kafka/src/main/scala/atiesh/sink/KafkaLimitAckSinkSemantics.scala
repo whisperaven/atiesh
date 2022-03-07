@@ -59,53 +59,64 @@ trait KafkaLimitAckSinkSemantics
                                  isRetry: Boolean): Unit = {
     if (!isRetry) pendingAcks.incrementAndGet()
 
-    kafkaSend(event, topic, parser).onComplete({
-        case Success(metadata) =>
-          logger.debug(
-            "sink <{}> produce message <{}> to kafka topic <{}> successed, " +
-            "with partition <{}> and timestamp <{}>, kafka offset was <{}>",
-            getName, event.getBody, topic,
-            metadata.partition, metadata.timestamp, metadata.offset)
+    Try {
+      kafkaSend(event, topic, parser)
+    } match {
+      case Success(req) =>
+        req.onComplete({
+          case Success(metadata) =>
+            logger.debug(
+              "sink <{}> produce message <{}> to kafka topic <{}> successed," +
+              " with partition <{}> and timestamp <{}>, kafka offset was <{}>",
+              getName, event.getBody, topic,
+              metadata.partition, metadata.timestamp, metadata.offset)
 
-          try {
-            kafkaResponseHandler(event, topic)(Try(metadata))
-          } catch {
-            case exc: Throwable =>
-              logger.error(s"sink <${getName}> throw unexcepted exception " +
-                           s"inside user define <kafkaResponseHandler>, " +
-                           s"which means you may use a kafka sink component " +
-                           s"with wrong implementation", exc)
-          }
+            try {
+              kafkaResponseHandler(event, topic)(Try(metadata))
+            } catch {
+              case exc: Throwable =>
+                logger.error(s"sink <${getName}> throw unexcepted exception " +
+                             s"inside user define <kafkaResponseHandler>, " +
+                             s"which means you may use a kafka sink " +
+                             s"component with wrong implementation", exc)
+            }
 
-          logger.debug("sink <{}> got total <{}> pending acks, check " +
-                       "for process resume after event send successed",
-                       getName, pendingAcks.get())
-          signal(Sig.SIG_RESUME_PROCESS)
-        case Failure(exc) =>
-          try {
-            /*
-             * let the user known what happened when something goes wrong, but
-             * they cant interfere, it's depends on <cfgMustSend> only
-             */
-            kafkaResponseHandler(event,
-                                 topic)(Try[RecordMetadata]({ throw exc }))
-          } catch {
-            case exc: Throwable =>
-              logger.error(s"sink <${getName}> throw unexcepted exception " +
-                           s"inside user define <kafkaResponseHandler>, " +
-                           s"which means you may use a kafka sink component " +
-                           s"with wrong implementation", exc)
-          }
-
-          if (cfgMustSend) {
-            kafkaProduce(event, topic, parser, true)
-          } else {
             logger.debug("sink <{}> got total <{}> pending acks, check " +
-                         "for process resume after event send failed",
+                         "for process resume after event send successed",
                          getName, pendingAcks.get())
             signal(Sig.SIG_RESUME_PROCESS)
-          }
-      })(getKafkaExecutionContext)
+          case Failure(exc) =>
+            try {
+              /*
+               * let the user known what happened when something goes wrong,
+               * but they cant interfere, it's depends on <cfgMustSend> only
+               */
+              kafkaResponseHandler(event,
+                                   topic)(Try[RecordMetadata]({ throw exc }))
+            } catch {
+              case exc: Throwable =>
+                logger.error(s"sink <${getName}> throw unexcepted exception " +
+                             s"inside user define <kafkaResponseHandler>, " +
+                             s"which means you may use a kafka sink " +
+                             s"component with wrong implementation", exc)
+            }
+
+            if (cfgMustSend) {
+              kafkaProduce(event, topic, parser, true)
+            } else {
+              logger.debug("sink <{}> got total <{}> pending acks, check " +
+                           "for process resume after event send failed",
+                           getName, pendingAcks.get())
+              signal(Sig.SIG_RESUME_PROCESS)
+            }
+        })(getKafkaExecutionContext)
+      case Failure(exc) =>
+        logger.error(
+          s"sink <${getName}> got unexpected message produce exception " +
+          s"while sending event <${event.getBody}> to kafka topic " +
+          s"<${topic}>, retring", exc)
+        kafkaProduce(event, topic, parser, true)  /* do it again */
+    }
   }
 
   /**
@@ -164,12 +175,12 @@ trait KafkaLimitAckSinkSemantics
                 logger.debug("sink <{}> acknowledge delayed commit from <{}>" +
                              "transaction(s), current <{}> pending acks",
                              getName, committer, pendings)
-                ack(committer, tran)
+                super.ack(committer, tran)
             })
           transactions.clear()
         }
 
-        if (pendings == 0) closing.map(closed => close(closed))
+        if (pendings == 0) closing.map(closed => super.close(closed))
 
       /**
        * handle other illegal signals.
