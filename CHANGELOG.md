@@ -4,7 +4,7 @@ All changes from version 1.1.1 will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [2.4.5]
+## [2.4.5] - 2022-03-07
 - bug fix, any exception throw inside `runFold` for response body reading no longer shutdown the http stream
 - bug fix, handle exception thrown by `pruducer.send`
 - bug fix, graceful shutdown of `BatchSinkSemantics` was properly handled
