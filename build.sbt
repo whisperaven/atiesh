@@ -38,6 +38,8 @@ lazy val distribution = Project(
 ).aggregate(core, httputils, filesystem, kafka, http)
  .settings(common)
 
+lazy val kamonVersion = "2.4.2"
+
 /* atiesh core project */
 lazy val dependencies = Seq(
     // akka-actor
@@ -45,9 +47,12 @@ lazy val dependencies = Seq(
     // typesafe config
     "com.typesafe"               %  "config"               % "1.4.1",
     // kamon
-    "io.kamon"                   %% "kamon-core"           % "2.0.5",
-    "io.kamon"                   %% "kamon-system-metrics" % "2.0.1",
-    "io.kamon"                   %% "kamon-prometheus"     % "2.0.1",
+    "io.kamon"                   %% "kamon-core"           % kamonVersion,
+    "io.kamon"                   %% "kamon-akka"           % kamonVersion,
+    "io.kamon"                   %% "kamon-executors"      % kamonVersion,
+    "io.kamon"                   %% "kamon-scala-future"   % kamonVersion,
+    "io.kamon"                   %% "kamon-system-metrics" % kamonVersion,
+    "io.kamon"                   %% "kamon-prometheus"     % kamonVersion,
     // logger
     "org.slf4j"                   % "slf4j-api"            % "1.7.32",
     "ch.qos.logback"              % "logback-classic"      % "1.2.3", // scalalogging docs
@@ -82,6 +87,7 @@ lazy val http = (project in file("semantics-http"))
     common,
     name := "atiesh-semantics-http",
     libraryDependencies ++= Seq(
+      "io.kamon"          %% "kamon-akka-http" % kamonVersion,
       "com.typesafe.akka" %% "akka-stream" % "2.5.26",
       "com.typesafe.akka" %% "akka-http" % "10.1.10"
     ),
@@ -111,6 +117,7 @@ lazy val kafka = (project in file("semantics-kafka"))
     common,
     name := "atiesh-semantics-kafka",
     libraryDependencies ++= Seq(
+      "io.kamon"        %% "kamon-kafka"   % kamonVersion,
       "org.apache.kafka" % "kafka-clients" % "2.4.1"
         exclude("org.slf4j", "slf4j-api"),
     ),
